@@ -31,6 +31,24 @@ function nextMessageId(): string {
   return `msg-${messageIdCounter}`;
 }
 
+function BatteryWatermark() {
+  return (
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
+      <svg
+        viewBox="0 0 200 100"
+        className="h-auto w-[34rem] max-w-[80%] text-teal opacity-[0.04]"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        aria-hidden="true"
+      >
+        <rect x="8" y="18" width="164" height="64" rx="10" />
+        <rect x="176" y="34" width="14" height="32" rx="3" fill="currentColor" stroke="none" />
+      </svg>
+    </div>
+  );
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [jurisdictionFilter, setJurisdictionFilter] = useState<JurisdictionFilter>("All");
@@ -81,12 +99,22 @@ export default function Home() {
     }
   };
 
+  const isWelcomeScreen = messages.length === 1;
+
   return (
     <div className="flex h-dvh flex-col bg-white">
       <Header jurisdictionFilter={jurisdictionFilter} onJurisdictionChange={setJurisdictionFilter} />
 
-      <main className="flex-1 overflow-y-auto bg-[#f9fafb] px-6 py-6">
-        <div className="mx-auto flex max-w-3xl flex-col gap-4">
+      <main
+        className={
+          isWelcomeScreen
+            ? "relative flex-1 overflow-y-auto bg-[radial-gradient(ellipse_at_center,#f0fdfa_0%,#f9fafb_70%)] px-6 py-6"
+            : "flex-1 overflow-y-auto bg-[#f9fafb] px-6 py-6"
+        }
+      >
+        {isWelcomeScreen && <BatteryWatermark />}
+
+        <div className="relative z-10 mx-auto flex max-w-3xl flex-col gap-4">
           {messages.map((message) => (
             <ChatMessageBubble
               key={message.id}
@@ -96,7 +124,7 @@ export default function Home() {
             />
           ))}
 
-          {messages.length === 1 && (
+          {isWelcomeScreen && (
             <div className="flex flex-wrap justify-center gap-2 pt-2">
               {SUGGESTED_QUESTIONS.map((question) => (
                 <button
