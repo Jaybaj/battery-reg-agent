@@ -17,11 +17,13 @@ const components: Components = {
   h2: ({ children }) => {
     const text = String(children);
     return (
-      <div className="mt-5 flex items-center gap-2 border-b border-slate-200 pb-1.5 first:mt-0">
-        <span aria-hidden className="text-sm">
-          {iconForHeading(text)}
-        </span>
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">{children}</h2>
+      <div className="mt-5 border-l-2 border-teal py-0.5 pl-3 first:mt-0">
+        <h2 className="flex items-center gap-2 text-[0.95rem] font-semibold text-slate-800">
+          <span aria-hidden className="text-sm">
+            {iconForHeading(text)}
+          </span>
+          {children}
+        </h2>
       </div>
     );
   },
@@ -40,7 +42,7 @@ const components: Components = {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-emerald-700 underline decoration-emerald-300 underline-offset-2 hover:text-emerald-800"
+      className="text-teal underline decoration-teal/40 underline-offset-2 hover:text-teal-dark"
     >
       {children}
     </a>

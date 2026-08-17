@@ -44,11 +44,11 @@ export default function SectionModal({ chunk, onClose }: SectionModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+      className="fixed inset-0 z-50 flex justify-end bg-slate-900/30 [animation:fade-in_0.2s_ease-out]"
       onClick={onClose}
     >
       <div
-        className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-white shadow-xl"
+        className="flex h-full w-full max-w-md flex-col overflow-hidden bg-white shadow-2xl [animation:slide-in-right_0.25s_ease-out]"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-start justify-between border-b border-slate-200 px-5 py-4">
@@ -82,7 +82,7 @@ export default function SectionModal({ chunk, onClose }: SectionModalProps) {
                 href={section.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mt-4 inline-block text-sm font-medium text-emerald-700 underline decoration-emerald-300 underline-offset-2 hover:text-emerald-800"
+                className="mt-4 inline-block text-sm font-medium text-teal underline decoration-teal/40 underline-offset-2 hover:text-teal-dark"
               >
                 View official source ↗
               </a>

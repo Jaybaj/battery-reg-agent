@@ -17,6 +17,14 @@ const WELCOME_MESSAGE: ChatMessage = {
     "compliance, across any jurisdiction worldwide.",
 };
 
+const SUGGESTED_QUESTIONS = [
+  "What do I need to sell e-bike batteries in the EU?",
+  "How do I ship lithium batteries internationally?",
+  "What are the EU recycled content thresholds?",
+  "What regulations apply to battery recycling?",
+  "When does the battery passport requirement start?",
+];
+
 let messageIdCounter = 0;
 function nextMessageId(): string {
   messageIdCounter += 1;
@@ -74,10 +82,10 @@ export default function Home() {
   };
 
   return (
-    <div className="flex h-dvh flex-col bg-slate-50">
+    <div className="flex h-dvh flex-col bg-white">
       <Header jurisdictionFilter={jurisdictionFilter} onJurisdictionChange={setJurisdictionFilter} />
 
-      <main className="flex-1 overflow-y-auto px-6 py-6">
+      <main className="flex-1 overflow-y-auto bg-[#f9fafb] px-6 py-6">
         <div className="mx-auto flex max-w-3xl flex-col gap-4">
           {messages.map((message) => (
             <ChatMessageBubble
@@ -87,6 +95,21 @@ export default function Home() {
               onOpenSection={setActiveSectionChunk}
             />
           ))}
+
+          {messages.length === 1 && (
+            <div className="flex flex-wrap justify-center gap-2 pt-2">
+              {SUGGESTED_QUESTIONS.map((question) => (
+                <button
+                  key={question}
+                  type="button"
+                  onClick={() => handleSend(question)}
+                  className="rounded-full border border-teal px-4 py-2 text-sm text-teal transition-colors hover:bg-teal hover:text-white"
+                >
+                  {question}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div ref={scrollAnchorRef} />
         </div>
