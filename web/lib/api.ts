@@ -1,6 +1,6 @@
 import type { ChunkUsed } from "./types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const REQUEST_TIMEOUT_MS = 60_000;
 
 export const UNREACHABLE_MESSAGE = "Could not reach the server. Please check your connection and try again.";
@@ -22,7 +22,7 @@ export async function sendChatMessage(message: string, history: HistoryTurn[]): 
   // this catch means something below the API layer (the network, CORS, the
   // server being down) failed, not the agent logic.
   try {
-    const res = await fetch(`${API_BASE}/chat`, {
+    const res = await fetch(`${API_URL}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, conversation_history: history }),
@@ -54,7 +54,7 @@ export async function fetchSection(instrument: string, sectionRef: string): Prom
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    res = await fetch(`${API_URL}${path}`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   } catch {
     // A real network/timeout failure -- distinct from a resolved error
     // response below, which carries a useful, specific message.
