@@ -3,9 +3,14 @@
 1. RETRIEVE (pure Python, agent/retriever.py): keyword/intent detection picks
    which tool functions to run, and runs them directly to gather chunks.
 2. GENERATE (one LLM call): the user's question plus the retrieved evidence,
-   formatted as context, is sent to Groq alongside the answer-contract system
-   prompt. The model only has to write the answer -- no tools parameter, so
-   no dependency on a model's (often unreliable) tool-calling support.
+   formatted as context, is sent to the model alongside the answer-contract
+   system prompt. The model only has to write the answer -- no tools
+   parameter, so no dependency on a model's (often unreliable) tool-calling
+   support.
+
+Generation walks a fallback chain of (provider, model) pairs -- OpenRouter's
+free Nemotron tiers first, then Groq's Qwen -- trying each in order until one
+succeeds.
 
 Every failure mode in this module degrades to a plain-text fallback answer
 rather than raising -- the API layer has its own catch-all too, but the
@@ -18,22 +23,44 @@ import logging
 import os
 import re
 import sys
-import time
 from typing import Any
 
-from groq import Groq, RateLimitError
+from groq import Groq
+from openai import OpenAI
 
 from agent.retriever import retrieve
 from agent.system_prompt import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-MODEL = os.environ.get("GROQ_MODEL", "qwen/qwen3.6-27b")
+OPENROUTER_HEADERS = {
+    "HTTP-Referer": "https://battery-reg-agent.vercel.app",
+    "X-Title": "Battery Regulation Navigator",
+}
+
+# (provider, model) pairs tried in order; the first one to return a response wins.
+MODEL_CHAIN = [
+    ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
+    ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+    ("groq", os.environ.get("GROQ_MODEL", "qwen/qwen3.6-27b")),
+]
+
 MAX_TOKENS = 2048
 CLIENT_TIMEOUT_SECONDS = 60.0
-RATE_LIMIT_RETRY_DELAY_SECONDS = 10
 
 FALLBACK_MESSAGE = "I wasn't able to process that question. Please try rephrasing or try again in a moment."
+
+
+def _build_clients() -> dict[str, Any]:
+    return {
+        "openrouter": OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.environ.get("OPENROUTER_API_KEY"),
+            default_headers=OPENROUTER_HEADERS,
+            timeout=CLIENT_TIMEOUT_SECONDS,
+        ),
+        "groq": Groq(timeout=CLIENT_TIMEOUT_SECONDS),
+    }
 
 
 def _format_chunk(chunk: dict[str, Any]) -> str:
@@ -72,36 +99,22 @@ def _format_context(evidence: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
-def _complete_with_retry(client: Groq, messages: list[dict[str, Any]]):
-    """One completion attempt, with a single retry after a fixed backoff on 429s.
-
-    Groq's own SDK already retries some errors internally (max_retries=2 by
-    default); this is a second, explicit layer on top because we saw 429s
-    survive that internal retry under back-to-back requests in testing.
-    """
-    try:
-        return client.chat.completions.create(model=MODEL, messages=messages, max_tokens=MAX_TOKENS)
-    except RateLimitError:
-        logger.warning("Groq rate limit hit; waiting %ss and retrying once", RATE_LIMIT_RETRY_DELAY_SECONDS)
-        time.sleep(RATE_LIMIT_RETRY_DELAY_SECONDS)
-        return client.chat.completions.create(model=MODEL, messages=messages, max_tokens=MAX_TOKENS)
-
-
 def run_agent(
     user_message: str,
     conversation_history: list[dict[str, str]] | None = None,
-    client: Groq | None = None,
+    clients: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the retrieve-then-generate flow for one user message.
 
     Returns {"answer": str, "chunks": list[dict]} -- the chunks are the
     corpus chunks the retrieve step gathered for this turn, exposed so
     callers (e.g. the API layer) can report exactly what evidence grounded
-    the answer without re-running retrieval themselves. On any Groq failure
-    (rate limit surviving the retry, timeout, connection error, etc.) this
-    returns a graceful fallback answer with no chunks instead of raising.
+    the answer without re-running retrieval themselves. Generation walks
+    MODEL_CHAIN in order, trying the next (provider, model) pair on any
+    failure. If every pair fails, this returns a graceful fallback answer
+    with no chunks instead of raising.
     """
-    client = client or Groq(timeout=CLIENT_TIMEOUT_SECONDS)
+    clients = clients or _build_clients()
 
     evidence = retrieve(user_message)
     context = _format_context(evidence)
@@ -110,13 +123,22 @@ def run_agent(
     messages.extend(conversation_history or [])
     messages.append({"role": "user", "content": f"{context}\n\n## User question\n\n{user_message}"})
 
-    try:
-        response = _complete_with_retry(client, messages)
-    except Exception:
-        logger.exception("Groq completion failed for question %r", user_message)
+    answer = None
+    for provider, model in MODEL_CHAIN:
+        try:
+            response = clients[provider].chat.completions.create(
+                model=model, messages=messages, max_tokens=MAX_TOKENS
+            )
+            answer = response.choices[0].message.content or FALLBACK_MESSAGE
+            logger.info("Answered question %r using %s/%s", user_message, provider, model)
+            break
+        except Exception:
+            logger.warning("Model %s/%s failed, trying next in fallback chain", provider, model, exc_info=True)
+
+    if answer is None:
+        logger.error("All models in fallback chain failed for question %r", user_message)
         return {"answer": FALLBACK_MESSAGE, "chunks": []}
 
-    answer = response.choices[0].message.content or FALLBACK_MESSAGE
     answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
     if evidence.get("typo_note"):
         answer = f"{evidence['typo_note']}\n\n{answer}"
