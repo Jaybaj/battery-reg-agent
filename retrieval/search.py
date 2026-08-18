@@ -18,16 +18,7 @@ from pgvector.psycopg import register_vector
 
 from ingestion.embed import embed_text
 
-DB_DSN = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://{user}:{password}@{host}:{port}/{dbname}".format(
-        user=os.environ.get("POSTGRES_USER", "battery_reg"),
-        password=os.environ.get("POSTGRES_PASSWORD", "battery_reg"),
-        host=os.environ.get("POSTGRES_HOST", "localhost"),
-        port=os.environ.get("POSTGRES_PORT", "5432"),
-        dbname=os.environ.get("POSTGRES_DB", "battery_reg"),
-    ),
-)
+DB_DSN = os.environ.get("DATABASE_URL", "postgresql://battery_reg:battery_reg@localhost:5432/battery_reg")
 
 RRF_K = 60  # standard RRF damping constant
 

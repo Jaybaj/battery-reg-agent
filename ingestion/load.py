@@ -17,16 +17,7 @@ from pgvector.psycopg import register_vector
 from ingestion.embed import MODEL_NAME, embed_batch
 from ingestion.parsers import ecfr, eur_lex
 
-DB_DSN = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://{user}:{password}@{host}:{port}/{dbname}".format(
-        user=os.environ.get("POSTGRES_USER", "battery_reg"),
-        password=os.environ.get("POSTGRES_PASSWORD", "battery_reg"),
-        host=os.environ.get("POSTGRES_HOST", "localhost"),
-        port=os.environ.get("POSTGRES_PORT", "5432"),
-        dbname=os.environ.get("POSTGRES_DB", "battery_reg"),
-    ),
-)
+DB_DSN = os.environ.get("DATABASE_URL", "postgresql://battery_reg:battery_reg@localhost:5432/battery_reg")
 
 INSERT_SQL = """
     INSERT INTO chunks (

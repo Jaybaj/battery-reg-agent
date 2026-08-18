@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -27,7 +28,7 @@ from agent.system_prompt import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+MODEL = os.environ.get("GROQ_MODEL", "qwen/qwen3.6-27b")
 MAX_TOKENS = 2048
 CLIENT_TIMEOUT_SECONDS = 60.0
 RATE_LIMIT_RETRY_DELAY_SECONDS = 10
@@ -116,6 +117,7 @@ def run_agent(
         return {"answer": FALLBACK_MESSAGE, "chunks": []}
 
     answer = response.choices[0].message.content or FALLBACK_MESSAGE
+    answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
     if evidence.get("typo_note"):
         answer = f"{evidence['typo_note']}\n\n{answer}"
 
