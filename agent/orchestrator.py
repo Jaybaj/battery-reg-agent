@@ -46,21 +46,32 @@ MODEL_CHAIN = [
 ]
 
 MAX_TOKENS = 2048
-CLIENT_TIMEOUT_SECONDS = 60.0
+CLIENT_TIMEOUT_SECONDS = 30.0
 
 FALLBACK_MESSAGE = "I wasn't able to process that question. Please try rephrasing or try again in a moment."
 
 
 def _build_clients() -> dict[str, Any]:
-    return {
-        "openrouter": OpenAI(
+    clients: dict[str, Any] = {}
+
+    openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if openrouter_api_key:
+        clients["openrouter"] = OpenAI(
+            api_key=openrouter_api_key,
             base_url="https://openrouter.ai/api/v1",
-            api_key=os.environ.get("OPENROUTER_API_KEY"),
             default_headers=OPENROUTER_HEADERS,
             timeout=CLIENT_TIMEOUT_SECONDS,
-        ),
-        "groq": Groq(timeout=CLIENT_TIMEOUT_SECONDS),
-    }
+        )
+    else:
+        logger.warning("OPENROUTER_API_KEY not set; skipping OpenRouter")
+
+    groq_api_key = os.environ.get("GROQ_API_KEY", "")
+    if groq_api_key:
+        clients["groq"] = Groq(api_key=groq_api_key, timeout=CLIENT_TIMEOUT_SECONDS)
+    else:
+        logger.warning("GROQ_API_KEY not set; skipping Groq")
+
+    return clients
 
 
 def _format_chunk(chunk: dict[str, Any]) -> str:
@@ -125,6 +136,9 @@ def run_agent(
 
     answer = None
     for provider, model in MODEL_CHAIN:
+        if provider not in clients:
+            continue
+        print(f"Trying {provider}/{model}...")
         try:
             response = clients[provider].chat.completions.create(
                 model=model, messages=messages, max_tokens=MAX_TOKENS

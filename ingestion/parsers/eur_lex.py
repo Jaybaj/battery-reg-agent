@@ -10,6 +10,7 @@ import re
 import sys
 import warnings
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -27,12 +28,16 @@ INSTRUMENT_SHORT = "EU Battery Reg"
 SOURCE_TYPE = "verified_corpus"
 MAX_CHUNK_CHARS = 1500
 USER_AGENT = "Mozilla/5.0 (compatible; battery-reg-agent-ingestion/0.1)"
+# A manually saved copy of the regulation, used instead of downloading when present.
+LOCAL_HTML_PATH = Path(__file__).resolve().parents[2] / "eurlex.html"
 
 # Heading/title classes that must never be folded into chunk body text.
 _HEADING_CLASSES = {"oj-ti-art", "oj-sti-art", "oj-ti-section-1", "oj-ti-section-2"}
 
 
 def fetch_html(url: str = SOURCE_URL, timeout: int = 30) -> str:
+    if LOCAL_HTML_PATH.is_file():
+        return LOCAL_HTML_PATH.read_text(encoding="utf-8")
     response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout)
     response.raise_for_status()
     return response.text
