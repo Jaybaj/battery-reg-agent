@@ -1,6 +1,6 @@
 import type { ChunkUsed } from "./types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://battery-reg-agent-production.up.railway.app";
 const REQUEST_TIMEOUT_MS = 60_000;
 
 export const UNREACHABLE_MESSAGE = "Could not reach the server. Please check your connection and try again.";
