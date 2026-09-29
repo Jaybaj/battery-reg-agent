@@ -38,9 +38,9 @@ OPENROUTER_HEADERS = {
 
 # OpenRouter models tried in order; the first one to return a response wins.
 MODEL_CHAIN = [
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
-    "nvidia/nemotron-3.5-lightning:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",  # faster
+    "nvidia/nemotron-3-ultra-550b-a55b:free",  # higher quality fallback
+    "nvidia/nemotron-3.5-lightning:free",  # fastest fallback
 ]
 
 MAX_TOKENS = 2048

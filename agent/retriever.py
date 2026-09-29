@@ -71,7 +71,7 @@ def _autocorrect_typos(question: str) -> tuple[str, list[tuple[str, str]]]:
 
     Only whole words are considered, and only close matches (edit distance <=
     _MAX_TYPO_DISTANCE, and never a match against a word that's already a key
-    term) are corrected -- this keeps unrelated words untouched rather than
+    term or an inflection of one, e.g. "thresholds") are corrected -- this keeps unrelated words untouched rather than
     forcing them toward the nearest key term. Returns the corrected question
     plus a list of (original, corrected) pairs so the caller can tell the
     user what was changed.
@@ -81,7 +81,7 @@ def _autocorrect_typos(question: str) -> tuple[str, list[tuple[str, str]]]:
     def _fix(match: re.Match[str]) -> str:
         word = match.group(0)
         lowered = word.lower()
-        if lowered in _KEY_TERMS:
+        if any(lowered.startswith(term) for term in _KEY_TERMS):
             return word
 
         best_term = None
