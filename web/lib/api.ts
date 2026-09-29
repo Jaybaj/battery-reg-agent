@@ -5,35 +5,85 @@ const REQUEST_TIMEOUT_MS = 60_000;
 
 export const UNREACHABLE_MESSAGE = "Could not reach the server. Please check your connection and try again.";
 
-export interface ChatApiResponse {
-  answer: string;
-  chunks_used: ChunkUsed[];
-}
-
 export interface HistoryTurn {
   role: "user" | "assistant";
   content: string;
 }
 
-export async function sendChatMessage(message: string, history: HistoryTurn[]): Promise<ChatApiResponse> {
+export interface ChatStreamHandlers {
+  onChunks: (chunks: ChunkUsed[]) => void;
+  onToken: (token: string) => void;
+}
+
+// Parses one SSE event from /chat/stream. Returns true for the [DONE] marker.
+function handleStreamEvent(event: string, handlers: ChatStreamHandlers): boolean {
+  const data = event
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trimStart())
+    .join("\n");
+  if (!data) return false;
+  if (data === "[DONE]") return true;
+
+  const payload = JSON.parse(data);
+  if (Array.isArray(payload.chunks_used)) handlers.onChunks(payload.chunks_used);
+  if (typeof payload.token === "string") handlers.onToken(payload.token);
+  return false;
+}
+
+export async function streamChatMessage(
+  message: string,
+  history: HistoryTurn[],
+  handlers: ChatStreamHandlers,
+): Promise<void> {
   // Any failure here -- network error, timeout, a non-2xx status, an
-  // unparsable body -- collapses to one friendly message. The backend itself
-  // always returns 200 with valid JSON even on internal errors, so reaching
-  // this catch means something below the API layer (the network, CORS, the
-  // server being down) failed, not the agent logic.
+  // unparsable event, the stream ending before [DONE] -- collapses to one
+  // friendly message. The backend degrades internal errors to a fallback
+  // answer inside the stream, so reaching this catch means something below
+  // the API layer (the network, CORS, the server being down) failed, not
+  // the agent logic. The timeout is an idle timeout, reset whenever data
+  // arrives, so a long answer that keeps streaming is never cut off.
+  const controller = new AbortController();
+  let idleTimer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const resetIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  };
+
   try {
-    const res = await fetch(`${API_URL}/chat`, {
+    const res = await fetch(`${API_URL}/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, conversation_history: history }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: controller.signal,
     });
-    if (!res.ok) {
+    if (!res.ok || !res.body) {
       throw new Error(`HTTP ${res.status}`);
     }
-    return await res.json();
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error("Stream ended before [DONE]");
+      resetIdleTimer();
+
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+      let boundary;
+      while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+        const event = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        if (handleStreamEvent(event, handlers)) {
+          await reader.cancel();
+          return;
+        }
+      }
+    }
   } catch {
     throw new Error(UNREACHABLE_MESSAGE);
+  } finally {
+    clearTimeout(idleTimer);
   }
 }
 

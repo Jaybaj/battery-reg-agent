@@ -5,7 +5,7 @@ import Header from "../components/Header";
 import ChatMessageBubble from "../components/ChatMessageBubble";
 import ChatInput from "../components/ChatInput";
 import SectionModal from "../components/SectionModal";
-import { sendChatMessage, UNREACHABLE_MESSAGE } from "../lib/api";
+import { streamChatMessage, UNREACHABLE_MESSAGE } from "../lib/api";
 import type { ChatMessage, ChunkUsed, JurisdictionFilter } from "../lib/types";
 
 const WELCOME_MESSAGE: ChatMessage = {
@@ -61,7 +61,7 @@ export default function Home() {
 
   // Each call gets its own user bubble + pending assistant bubble, appended in
   // order immediately. Multiple calls can be in flight at once -- each one's
-  // completion only ever updates its own pending bubble by id, so a slower
+  // stream only ever updates its own pending bubble by id, so a slower
   // earlier request can never clobber or reorder a faster later one.
   const handleSend = async (text: string) => {
     const userMessage: ChatMessage = { id: nextMessageId(), role: "user", content: text };
@@ -69,32 +69,37 @@ export default function Home() {
     const pendingMessage: ChatMessage = { id: pendingId, role: "assistant", content: "", pending: true };
 
     const history = messages
-      .filter((message) => message.id !== "welcome" && !message.pending)
+      .filter((message) => message.id !== "welcome" && !message.pending && !message.streaming)
       .map((message) => ({ role: message.role, content: message.content }));
 
     setMessages((prev) => [...prev, userMessage, pendingMessage]);
 
+    const updatePending = (update: (message: ChatMessage) => ChatMessage) =>
+      setMessages((prev) => prev.map((message) => (message.id === pendingId ? update(message) : message)));
+
+    let receivedText = false;
     try {
-      const response = await sendChatMessage(text, history);
-      setMessages((prev) =>
-        prev.map((message) =>
-          message.id === pendingId
-            ? { id: pendingId, role: "assistant", content: response.answer, chunksUsed: response.chunks_used }
-            : message,
-        ),
-      );
+      await streamChatMessage(text, history, {
+        onChunks: (chunks) => updatePending((message) => ({ ...message, chunksUsed: chunks })),
+        onToken: (token) => {
+          receivedText = true;
+          updatePending((message) => ({
+            ...message,
+            content: message.content + token,
+            pending: false,
+            streaming: true,
+          }));
+        },
+      });
+      updatePending((message) => ({ ...message, pending: false, streaming: false }));
     } catch (error) {
-      setMessages((prev) =>
-        prev.map((message) =>
-          message.id === pendingId
-            ? {
-                id: pendingId,
-                role: "assistant",
-                content: error instanceof Error ? error.message : UNREACHABLE_MESSAGE,
-                isError: true,
-              }
-            : message,
-        ),
+      const errorText = error instanceof Error ? error.message : UNREACHABLE_MESSAGE;
+      // Keep whatever already streamed in rather than replacing a partial
+      // answer with an error bubble.
+      updatePending((message) =>
+        receivedText
+          ? { ...message, content: `${message.content}\n\n_(${errorText})_`, streaming: false }
+          : { id: pendingId, role: "assistant", content: errorText, isError: true },
       );
     }
   };

@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Iterable, Iterator
 from typing import Any
 
 from openai import OpenAI
@@ -98,6 +99,17 @@ def _format_context(evidence: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def _build_messages(
+    user_message: str,
+    conversation_history: list[dict[str, str]] | None,
+    evidence: dict[str, Any],
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(conversation_history or [])
+    messages.append({"role": "user", "content": f"{_format_context(evidence)}\n\n## User question\n\n{user_message}"})
+    return messages
+
+
 def run_agent(
     user_message: str,
     conversation_history: list[dict[str, str]] | None = None,
@@ -116,11 +128,7 @@ def run_agent(
     client = client or _build_client()
 
     evidence = retrieve(user_message)
-    context = _format_context(evidence)
-
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(conversation_history or [])
-    messages.append({"role": "user", "content": f"{context}\n\n## User question\n\n{user_message}"})
+    messages = _build_messages(user_message, conversation_history, evidence)
 
     answer = None
     for model in MODEL_CHAIN if client else []:
@@ -142,6 +150,121 @@ def run_agent(
         answer = f"{evidence['typo_note']}\n\n{answer}"
 
     return {"answer": answer, "chunks": evidence["chunks"]}
+
+
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+def _partial_tag_suffix(text: str, tag: str) -> int:
+    """Length of the longest suffix of `text` that is a proper prefix of `tag`."""
+    for length in range(min(len(tag) - 1, len(text)), 0, -1):
+        if text.endswith(tag[:length]):
+            return length
+    return 0
+
+
+def _strip_think_stream(tokens: Iterable[str]) -> Iterator[str]:
+    """Streaming equivalent of run_agent's <think>...</think> removal + strip().
+
+    Tags can be split across token boundaries, so text that might be the
+    start of a tag is held back until the next token disambiguates it.
+    Leading whitespace is dropped until the first real content, matching the
+    non-streaming path's strip().
+    """
+    buffer = ""
+    inside_think = False
+    started = False
+
+    def emit(text: str) -> Iterator[str]:
+        nonlocal started
+        if not started:
+            text = text.lstrip()
+            started = bool(text)
+        if text:
+            yield text
+
+    for token in tokens:
+        buffer += token
+        while True:
+            if inside_think:
+                end = buffer.find(_THINK_CLOSE)
+                if end == -1:
+                    buffer = buffer[len(buffer) - _partial_tag_suffix(buffer, _THINK_CLOSE) :]
+                    break
+                buffer = buffer[end + len(_THINK_CLOSE) :]
+                inside_think = False
+            else:
+                start = buffer.find(_THINK_OPEN)
+                if start == -1:
+                    held = _partial_tag_suffix(buffer, _THINK_OPEN)
+                    yield from emit(buffer[: len(buffer) - held])
+                    buffer = buffer[len(buffer) - held :]
+                    break
+                yield from emit(buffer[:start])
+                buffer = buffer[start + len(_THINK_OPEN) :]
+                inside_think = True
+
+    if not inside_think:
+        yield from emit(buffer)
+
+
+def _stream_model(client: OpenAI, model: str, messages: list[dict[str, Any]]) -> Iterator[str]:
+    stream = client.chat.completions.create(model=model, messages=messages, max_tokens=MAX_TOKENS, stream=True)
+    for event in stream:
+        # OpenRouter interleaves keep-alive/usage events that carry no choices.
+        if event.choices and event.choices[0].delta.content:
+            yield event.choices[0].delta.content
+
+
+def stream_agent(
+    user_message: str,
+    conversation_history: list[dict[str, str]] | None = None,
+    client: OpenAI | None = None,
+) -> tuple[list[dict[str, Any]], Iterator[str]]:
+    """Streaming variant of run_agent.
+
+    Retrieval runs eagerly, so the returned chunks are available before any
+    generation happens (letting the API send citations up front). The
+    returned iterator yields answer text as it arrives from the model.
+
+    Fallback works as in run_agent, but only until a model has produced
+    output: once text has reached the client it can't be retracted, so a
+    mid-stream failure ends the answer with a short note instead of
+    restarting on the next model. If no model produces anything, the
+    iterator yields FALLBACK_MESSAGE.
+    """
+    client = client or _build_client()
+
+    evidence = retrieve(user_message)
+    messages = _build_messages(user_message, conversation_history, evidence)
+
+    def tokens() -> Iterator[str]:
+        if evidence.get("typo_note"):
+            yield f"{evidence['typo_note']}\n\n"
+
+        for model in MODEL_CHAIN if client else []:
+            print(f"Trying openrouter/{model}...")
+            produced_output = False
+            try:
+                for text in _strip_think_stream(_stream_model(client, model, messages)):
+                    produced_output = True
+                    yield text
+                if produced_output:
+                    logger.info("Streamed answer to %r using openrouter/%s", user_message, model)
+                    return
+                logger.warning("Model openrouter/%s returned no content, trying next in fallback chain", model)
+            except Exception:
+                if produced_output:
+                    logger.exception("Model openrouter/%s failed mid-stream for %r", model, user_message)
+                    yield "\n\n_(The response was interrupted. Please try again.)_"
+                    return
+                logger.warning("Model openrouter/%s failed, trying next in fallback chain", model, exc_info=True)
+
+        logger.error("All models in fallback chain failed for question %r", user_message)
+        yield FALLBACK_MESSAGE
+
+    return evidence["chunks"], tokens()
 
 
 if __name__ == "__main__":
