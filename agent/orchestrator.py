@@ -8,9 +8,8 @@
    parameter, so no dependency on a model's (often unreliable) tool-calling
    support.
 
-Generation walks a fallback chain of (provider, model) pairs -- OpenRouter's
-free Nemotron tiers first, then Groq's Qwen -- trying each in order until one
-succeeds.
+Generation walks a fallback chain of OpenRouter's free Nemotron models,
+trying each in order until one succeeds.
 
 Every failure mode in this module degrades to a plain-text fallback answer
 rather than raising -- the API layer has its own catch-all too, but the
@@ -25,7 +24,6 @@ import re
 import sys
 from typing import Any
 
-from groq import Groq
 from openai import OpenAI
 
 from agent.retriever import retrieve
@@ -38,40 +36,30 @@ OPENROUTER_HEADERS = {
     "X-Title": "Battery Regulation Navigator",
 }
 
-# (provider, model) pairs tried in order; the first one to return a response wins.
+# OpenRouter models tried in order; the first one to return a response wins.
 MODEL_CHAIN = [
-    ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
-    ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
-    ("groq", os.environ.get("GROQ_MODEL", "qwen/qwen3.6-27b")),
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "nvidia/nemotron-3.5-lightning:free",
 ]
 
 MAX_TOKENS = 2048
-CLIENT_TIMEOUT_SECONDS = 30.0
+CLIENT_TIMEOUT_SECONDS = 15.0  # per model attempt
 
 FALLBACK_MESSAGE = "I wasn't able to process that question. Please try rephrasing or try again in a moment."
 
 
-def _build_clients() -> dict[str, Any]:
-    clients: dict[str, Any] = {}
-
+def _build_client() -> OpenAI | None:
     openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "")
-    if openrouter_api_key:
-        clients["openrouter"] = OpenAI(
-            api_key=openrouter_api_key,
-            base_url="https://openrouter.ai/api/v1",
-            default_headers=OPENROUTER_HEADERS,
-            timeout=CLIENT_TIMEOUT_SECONDS,
-        )
-    else:
-        logger.warning("OPENROUTER_API_KEY not set; skipping OpenRouter")
-
-    groq_api_key = os.environ.get("GROQ_API_KEY", "")
-    if groq_api_key:
-        clients["groq"] = Groq(api_key=groq_api_key, timeout=CLIENT_TIMEOUT_SECONDS)
-    else:
-        logger.warning("GROQ_API_KEY not set; skipping Groq")
-
-    return clients
+    if not openrouter_api_key:
+        logger.warning("OPENROUTER_API_KEY not set; no model available")
+        return None
+    return OpenAI(
+        api_key=openrouter_api_key,
+        base_url="https://openrouter.ai/api/v1",
+        default_headers=OPENROUTER_HEADERS,
+        timeout=CLIENT_TIMEOUT_SECONDS,
+    )
 
 
 def _format_chunk(chunk: dict[str, Any]) -> str:
@@ -113,7 +101,7 @@ def _format_context(evidence: dict[str, Any]) -> str:
 def run_agent(
     user_message: str,
     conversation_history: list[dict[str, str]] | None = None,
-    clients: dict[str, Any] | None = None,
+    client: OpenAI | None = None,
 ) -> dict[str, Any]:
     """Run the retrieve-then-generate flow for one user message.
 
@@ -121,11 +109,11 @@ def run_agent(
     corpus chunks the retrieve step gathered for this turn, exposed so
     callers (e.g. the API layer) can report exactly what evidence grounded
     the answer without re-running retrieval themselves. Generation walks
-    MODEL_CHAIN in order, trying the next (provider, model) pair on any
-    failure. If every pair fails, this returns a graceful fallback answer
+    MODEL_CHAIN in order, trying the next model on any failure. If every
+    model fails, this returns a graceful fallback answer
     with no chunks instead of raising.
     """
-    clients = clients or _build_clients()
+    client = client or _build_client()
 
     evidence = retrieve(user_message)
     context = _format_context(evidence)
@@ -135,19 +123,15 @@ def run_agent(
     messages.append({"role": "user", "content": f"{context}\n\n## User question\n\n{user_message}"})
 
     answer = None
-    for provider, model in MODEL_CHAIN:
-        if provider not in clients:
-            continue
-        print(f"Trying {provider}/{model}...")
+    for model in MODEL_CHAIN if client else []:
+        print(f"Trying openrouter/{model}...")
         try:
-            response = clients[provider].chat.completions.create(
-                model=model, messages=messages, max_tokens=MAX_TOKENS
-            )
+            response = client.chat.completions.create(model=model, messages=messages, max_tokens=MAX_TOKENS)
             answer = response.choices[0].message.content or FALLBACK_MESSAGE
-            logger.info("Answered question %r using %s/%s", user_message, provider, model)
+            logger.info("Answered question %r using openrouter/%s", user_message, model)
             break
         except Exception:
-            logger.warning("Model %s/%s failed, trying next in fallback chain", provider, model, exc_info=True)
+            logger.warning("Model openrouter/%s failed, trying next in fallback chain", model, exc_info=True)
 
     if answer is None:
         logger.error("All models in fallback chain failed for question %r", user_message)
