@@ -8,8 +8,9 @@
    parameter, so no dependency on a model's (often unreliable) tool-calling
    support.
 
-Generation walks a fallback chain of OpenRouter's free Nemotron models,
-trying each in order until one succeeds.
+Generation walks a fallback chain -- DeepSeek V3 first (if DEEPSEEK_API_KEY
+is set), then OpenRouter's free Nemotron models -- trying each in order
+until one succeeds.
 
 Every failure mode in this module degrades to a plain-text fallback answer
 rather than raising -- the API layer has its own catch-all too, but the
@@ -37,11 +38,13 @@ OPENROUTER_HEADERS = {
     "X-Title": "Battery Regulation Navigator",
 }
 
-# OpenRouter models tried in order; the first one to return a response wins.
-MODEL_CHAIN = [
-    "nvidia/nemotron-3.5-lightning:free",  # fastest
-    "nvidia/nemotron-3-super-120b-a12b:free",  # quality fallback
-    "nvidia/nemotron-3-ultra-550b-a55b:free",  # best quality, slowest
+# Tried first when DEEPSEEK_API_KEY is set -- fast, paid.
+DEEPSEEK_MODEL = "deepseek-chat"  # DeepSeek V3
+
+# Free OpenRouter models tried in order after DeepSeek.
+OPENROUTER_MODEL_CHAIN = [
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
 ]
 
 MAX_TOKENS = 2048
@@ -49,11 +52,26 @@ CLIENT_TIMEOUT_SECONDS = 15.0  # per model attempt
 
 FALLBACK_MESSAGE = "I wasn't able to process that question. Please try rephrasing or try again in a moment."
 
+# (provider label, client, model) -- one entry per attempt in the fallback chain.
+ModelAttempt = tuple[str, OpenAI, str]
 
-def _build_client() -> OpenAI | None:
+
+def _build_deepseek_client() -> OpenAI | None:
+    deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not deepseek_api_key:
+        logger.info("DEEPSEEK_API_KEY not set; skipping DeepSeek")
+        return None
+    return OpenAI(
+        api_key=deepseek_api_key,
+        base_url="https://api.deepseek.com",
+        timeout=CLIENT_TIMEOUT_SECONDS,
+    )
+
+
+def _build_openrouter_client() -> OpenAI | None:
     openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "")
     if not openrouter_api_key:
-        logger.warning("OPENROUTER_API_KEY not set; no model available")
+        logger.warning("OPENROUTER_API_KEY not set; skipping OpenRouter")
         return None
     return OpenAI(
         api_key=openrouter_api_key,
@@ -61,6 +79,23 @@ def _build_client() -> OpenAI | None:
         default_headers=OPENROUTER_HEADERS,
         timeout=CLIENT_TIMEOUT_SECONDS,
     )
+
+
+def _build_model_chain() -> list[ModelAttempt]:
+    """Fallback chain: DeepSeek V3 first, then OpenRouter's free Nemotron models.
+
+    Providers whose API key isn't set are left out entirely.
+    """
+    chain: list[ModelAttempt] = []
+    deepseek = _build_deepseek_client()
+    if deepseek:
+        chain.append(("deepseek", deepseek, DEEPSEEK_MODEL))
+    openrouter = _build_openrouter_client()
+    if openrouter:
+        chain.extend(("openrouter", openrouter, model) for model in OPENROUTER_MODEL_CHAIN)
+    if not chain:
+        logger.warning("Neither DEEPSEEK_API_KEY nor OPENROUTER_API_KEY is set; no model available")
+    return chain
 
 
 def _format_chunk(chunk: dict[str, Any]) -> str:
@@ -113,7 +148,7 @@ def _build_messages(
 def run_agent(
     user_message: str,
     conversation_history: list[dict[str, str]] | None = None,
-    client: OpenAI | None = None,
+    model_chain: list[ModelAttempt] | None = None,
 ) -> dict[str, Any]:
     """Run the retrieve-then-generate flow for one user message.
 
@@ -121,25 +156,25 @@ def run_agent(
     corpus chunks the retrieve step gathered for this turn, exposed so
     callers (e.g. the API layer) can report exactly what evidence grounded
     the answer without re-running retrieval themselves. Generation walks
-    MODEL_CHAIN in order, trying the next model on any failure. If every
-    model fails, this returns a graceful fallback answer
-    with no chunks instead of raising.
+    the model chain (see _build_model_chain) in order, trying the next
+    model on any failure. If every model fails, this returns a graceful
+    fallback answer with no chunks instead of raising.
     """
-    client = client or _build_client()
+    model_chain = _build_model_chain() if model_chain is None else model_chain
 
     evidence = retrieve(user_message)
     messages = _build_messages(user_message, conversation_history, evidence)
 
     answer = None
-    for model in MODEL_CHAIN if client else []:
-        print(f"Trying openrouter/{model}...")
+    for provider, client, model in model_chain:
+        print(f"Trying {provider}/{model}...")
         try:
             response = client.chat.completions.create(model=model, messages=messages, max_tokens=MAX_TOKENS)
             answer = response.choices[0].message.content or FALLBACK_MESSAGE
-            logger.info("Answered question %r using openrouter/%s", user_message, model)
+            logger.info("Answered question %r using %s/%s", user_message, provider, model)
             break
         except Exception:
-            logger.warning("Model openrouter/%s failed, trying next in fallback chain", model, exc_info=True)
+            logger.warning("Model %s/%s failed, trying next in fallback chain", provider, model, exc_info=True)
 
     if answer is None:
         logger.error("All models in fallback chain failed for question %r", user_message)
@@ -220,7 +255,7 @@ def _stream_model(client: OpenAI, model: str, messages: list[dict[str, Any]]) ->
 def stream_agent(
     user_message: str,
     conversation_history: list[dict[str, str]] | None = None,
-    client: OpenAI | None = None,
+    model_chain: list[ModelAttempt] | None = None,
 ) -> tuple[list[dict[str, Any]], Iterator[str]]:
     """Streaming variant of run_agent.
 
@@ -234,7 +269,7 @@ def stream_agent(
     restarting on the next model. If no model produces anything, the
     iterator yields FALLBACK_MESSAGE.
     """
-    client = client or _build_client()
+    model_chain = _build_model_chain() if model_chain is None else model_chain
 
     evidence = retrieve(user_message)
     messages = _build_messages(user_message, conversation_history, evidence)
@@ -243,23 +278,23 @@ def stream_agent(
         if evidence.get("typo_note"):
             yield f"{evidence['typo_note']}\n\n"
 
-        for model in MODEL_CHAIN if client else []:
-            print(f"Trying openrouter/{model}...")
+        for provider, client, model in model_chain:
+            print(f"Trying {provider}/{model}...")
             produced_output = False
             try:
                 for text in _strip_think_stream(_stream_model(client, model, messages)):
                     produced_output = True
                     yield text
                 if produced_output:
-                    logger.info("Streamed answer to %r using openrouter/%s", user_message, model)
+                    logger.info("Streamed answer to %r using %s/%s", user_message, provider, model)
                     return
-                logger.warning("Model openrouter/%s returned no content, trying next in fallback chain", model)
+                logger.warning("Model %s/%s returned no content, trying next in fallback chain", provider, model)
             except Exception:
                 if produced_output:
-                    logger.exception("Model openrouter/%s failed mid-stream for %r", model, user_message)
+                    logger.exception("Model %s/%s failed mid-stream for %r", provider, model, user_message)
                     yield "\n\n_(The response was interrupted. Please try again.)_"
                     return
-                logger.warning("Model openrouter/%s failed, trying next in fallback chain", model, exc_info=True)
+                logger.warning("Model %s/%s failed, trying next in fallback chain", provider, model, exc_info=True)
 
         logger.error("All models in fallback chain failed for question %r", user_message)
         yield FALLBACK_MESSAGE
