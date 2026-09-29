@@ -63,8 +63,8 @@ docker-compose up -d postgres
 # 5. Load the verified corpus (parses + chunks + embeds + inserts)
 python -m ingestion.load
 
-# 6. Set your Groq API key
-export GROQ_API_KEY=your_key_here   # Windows PowerShell: $env:GROQ_API_KEY = "your_key_here"
+# 6. Set your OpenRouter API key
+export OPENROUTER_API_KEY=your_key_here   # Windows PowerShell: $env:OPENROUTER_API_KEY = "your_key_here"
 
 # 7. Start the backend
 uvicorn api.main:app --reload
@@ -80,7 +80,7 @@ The frontend runs at `http://localhost:3000` and talks to the backend at `http:/
 - **Backend**: Python 3.11, FastAPI
 - **Frontend**: Next.js
 - **Database**: Postgres with pgvector (hybrid storage: raw text + tsvector for BM25, embeddings for vector search)
-- **LLM**: Groq (Llama 3.3)
+- **LLM**: OpenRouter (NVIDIA Nemotron free tier, with an in-order model fallback chain)
 - **Embeddings**: sentence-transformers (`all-MiniLM-L6-v2`)
 - **Retrieval**: hybrid BM25 (tsvector) + vector search, result fusion
 
@@ -89,7 +89,7 @@ The frontend runs at `http://localhost:3000` and talks to the backend at `http:/
 1. **Ingestion** — per-jurisdiction parsers (`ingestion/parsers/`) pull source documents (EUR-Lex, eCFR, state statutes) and normalize them into structured chunks.
 2. **Chunking** — chunks are split at article/section level, each carrying its chapter/part header as context and a standard metadata schema (jurisdiction, instrument, section reference, deep link, version date).
 3. **Hybrid retrieval** — queries run against both BM25 (tsvector) and vector search (pgvector) in parallel, with results fused before ranking.
-4. **LLM synthesis** — the agent (Groq/Llama 3.3) orchestrates tool calls (`search`, `get_section`, `obligations_for`, `list_deadlines`, `compare_jurisdictions`) and synthesizes an answer following the fixed answer contract: situational understanding, applicable regulations, step-by-step guidance, deadlines, caveats, and a disclaimer.
+4. **LLM synthesis** — the agent (OpenRouter/Nemotron) orchestrates tool calls (`search`, `get_section`, `obligations_for`, `list_deadlines`, `compare_jurisdictions`) and synthesizes an answer following the fixed answer contract: situational understanding, applicable regulations, step-by-step guidance, deadlines, caveats, and a disclaimer.
 5. **Cited response** — every claim resolves to a specific article/section with a deep link back to the official source, distinguishing verified-corpus answers from web-search fallback.
 
 ## Contributing
