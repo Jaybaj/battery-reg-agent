@@ -142,16 +142,49 @@ _STOPWORDS = frozenset(
 )
 
 
+# Words that say what *kind* of information is wanted rather than what it's
+# about. Dropped from the previous question so only its topic carries over
+# ("battery passport requirements" -> "battery passport"); the follow-up
+# supplies the new intent instead.
+_GENERIC_INTENT_WORDS = frozenset(
+    """
+    requirement requirements rule rules obligation obligations regulation regulations
+    deadline deadlines detail details information info overview apply applies applicable
+    """.split()
+)
+
+# Verbs that carry no intent of their own in a follow-up ("does it apply to EVs?").
+_NON_INTENT_WORDS = frozenset({"apply", "applies", "applicable"})
+
+# Shorthand in follow-ups expanded to the phrasing the corpus actually uses.
+_TERM_EXPANSIONS = {
+    "ev": "EV batteries",
+    "evs": "EV batteries",
+    "lmt": "LMT batteries",
+    "lmts": "LMT batteries",
+}
+
+
 def _is_follow_up(question: str) -> bool:
     """Short questions that lean on a pronoun or a "what about..." opener.
 
-    Deliberately a cheap heuristic (no LLM call): a false positive only
-    prepends a few extra keywords from the previous question to the search,
-    which hybrid search tolerates well.
+    Deliberately a cheap heuristic (no LLM call): a false positive swaps the
+    question for a keyword query built from it plus the previous question's
+    topic, which hybrid search still handles reasonably.
     """
     if len(re.findall(r"\w+", question)) > _MAX_FOLLOW_UP_WORDS:
         return False
     return bool(_FOLLOW_UP_OPENERS.search(question) or _FOLLOW_UP_REFERENCES.search(question))
+
+
+def _normalize(word: str) -> str:
+    """Crude singular form for de-duplication ("batteries" == "battery")."""
+    lowered = word.lower()
+    if lowered.endswith("ies") and len(lowered) > 4:
+        return lowered[:-3] + "y"
+    if lowered.endswith("s") and not lowered.endswith("ss") and len(lowered) > 3:
+        return lowered[:-1]
+    return lowered
 
 
 def _key_terms(text: str) -> list[str]:
@@ -159,22 +192,26 @@ def _key_terms(text: str) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
     for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9/.\-]*[A-Za-z0-9]|[A-Za-z0-9]", text):
-        lowered = word.lower()
-        if lowered in _STOPWORDS or lowered in seen:
+        normalized = _normalize(word)
+        if word.lower() in _STOPWORDS or normalized in seen:
             continue
-        seen.add(lowered)
+        seen.add(normalized)
         terms.append(word)
     return terms
 
 
 def _rewrite_follow_up(question: str, conversation_history: list[dict[str, Any]] | None) -> str:
-    """Make a follow-up standalone by prepending the previous question's key terms.
+    """Replace a follow-up with a standalone keyword query: previous topic + new intent.
 
-    e.g. "What are the battery passport requirements?" then "What about the
-    deadlines for this?" searches for "battery passport requirements: What
-    about the deadlines for this?". If the previous question was itself a
-    follow-up, it's resolved first (recursively, against the history before
-    it), so a chain of follow-ups keeps the original topic.
+    The topic is the previous user question's key terms minus generic intent
+    words; the intent is the follow-up's own key terms. e.g. after "What are
+    the battery passport requirements?":
+      "What about the deadlines for this?" -> "battery passport deadlines"
+      "What about California?"            -> "battery passport California"
+      "And for EVs?"                       -> "battery passport EV batteries"
+    If the previous question was itself a follow-up, it's resolved first
+    (recursively, against the history before it), so a chain of follow-ups
+    keeps the original topic.
     """
     if not conversation_history or not _is_follow_up(question):
         return question
@@ -187,11 +224,17 @@ def _rewrite_follow_up(question: str, conversation_history: list[dict[str, Any]]
     else:
         return question
 
-    question_terms = {term.lower() for term in _key_terms(question)}
-    context_terms = [term for term in _key_terms(previous) if term.lower() not in question_terms]
-    if not context_terms:
+    topic = [term for term in _key_terms(previous) if term.lower() not in _GENERIC_INTENT_WORDS]
+    if not topic:
         return question
-    return f"{' '.join(context_terms)}: {question}"
+
+    topic_words = {_normalize(term) for term in topic}
+    intent = [
+        _TERM_EXPANSIONS.get(term.lower(), term)
+        for term in _key_terms(question)
+        if _normalize(term) not in topic_words and term.lower() not in _NON_INTENT_WORDS
+    ]
+    return " ".join(topic + intent)
 
 
 def _interleave(result_lists: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:

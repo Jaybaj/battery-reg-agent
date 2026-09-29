@@ -122,15 +122,17 @@ def _format_context(evidence: dict[str, Any]) -> str:
     chunks = evidence["chunks"]
     deadlines = evidence["deadlines"]
 
-    parts = ["## Retrieved context"]
+    # The model sees (and tends to echo) these labels, so they stay neutral --
+    # nothing about retrieval, context or chunks.
+    parts = ["## Reference material"]
 
     if chunks:
-        parts.append("### Corpus chunks\n\n" + "\n\n".join(_format_chunk(c) for c in chunks))
+        parts.append("### Relevant regulations\n\n" + "\n\n".join(_format_chunk(c) for c in chunks))
     else:
-        parts.append("### Corpus chunks\n\n(No matching chunks -- the verified corpus has no coverage for this query.)")
+        parts.append("### Relevant regulations\n\n(None found for this question.)")
 
     if deadlines:
-        parts.append("### Curated deadlines\n\n" + "\n\n".join(_format_deadline(d) for d in deadlines))
+        parts.append("### Verified deadlines\n\n" + "\n\n".join(_format_deadline(d) for d in deadlines))
 
     return "\n\n".join(parts)
 
