@@ -48,6 +48,7 @@ OPENROUTER_MODEL_CHAIN = [
 ]
 
 MAX_TOKENS = 2048
+MAX_HISTORY_MESSAGES = 10  # last 5 exchanges
 CLIENT_TIMEOUT_SECONDS = 15.0  # per model attempt
 
 FALLBACK_MESSAGE = "I wasn't able to process that question. Please try rephrasing or try again in a moment."
@@ -139,8 +140,18 @@ def _build_messages(
     conversation_history: list[dict[str, str]] | None,
     evidence: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    # Prior turns sit between the system prompt and the current question so
+    # the model can resolve follow-ups. Only user/assistant turns are kept (a
+    # client must not be able to inject a system message), capped to the most
+    # recent MAX_HISTORY_MESSAGES.
+    history = [
+        {"role": turn["role"], "content": turn["content"]}
+        for turn in conversation_history or []
+        if turn.get("role") in ("user", "assistant") and isinstance(turn.get("content"), str)
+    ][-MAX_HISTORY_MESSAGES:]
+
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(conversation_history or [])
+    messages.extend(history)
     messages.append({"role": "user", "content": f"{_format_context(evidence)}\n\n## User question\n\n{user_message}"})
     return messages
 
@@ -162,7 +173,7 @@ def run_agent(
     """
     model_chain = _build_model_chain() if model_chain is None else model_chain
 
-    evidence = retrieve(user_message)
+    evidence = retrieve(user_message, conversation_history)
     messages = _build_messages(user_message, conversation_history, evidence)
 
     answer = None
@@ -271,7 +282,7 @@ def stream_agent(
     """
     model_chain = _build_model_chain() if model_chain is None else model_chain
 
-    evidence = retrieve(user_message)
+    evidence = retrieve(user_message, conversation_history)
     messages = _build_messages(user_message, conversation_history, evidence)
 
     def tokens() -> Iterator[str]:

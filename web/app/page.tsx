@@ -5,7 +5,7 @@ import Header from "../components/Header";
 import ChatMessageBubble from "../components/ChatMessageBubble";
 import ChatInput from "../components/ChatInput";
 import SectionModal from "../components/SectionModal";
-import { streamChatMessage, UNREACHABLE_MESSAGE } from "../lib/api";
+import { streamChatMessage, UNREACHABLE_MESSAGE, type HistoryTurn } from "../lib/api";
 import type { ChatMessage, ChunkUsed, JurisdictionFilter } from "../lib/types";
 
 const WELCOME_MESSAGE: ChatMessage = {
@@ -24,6 +24,30 @@ const SUGGESTED_QUESTIONS = [
   "What regulations apply to battery recycling?",
   "When does the battery passport requirement start?",
 ];
+
+// Last 5 exchanges -- keeps follow-up context without blowing the token budget.
+const MAX_HISTORY_MESSAGES = 10;
+
+// Only completed exchanges (a user question followed by a finished, non-error
+// answer) go into history, so the model never sees an error bubble or a
+// question whose answer is still streaming in.
+function buildHistory(messages: ChatMessage[]): HistoryTurn[] {
+  const history: HistoryTurn[] = [];
+  for (let i = 0; i < messages.length - 1; i += 1) {
+    const question = messages[i];
+    const answer = messages[i + 1];
+    if (
+      question.role === "user" &&
+      answer.role === "assistant" &&
+      !answer.isError &&
+      !answer.pending &&
+      !answer.streaming
+    ) {
+      history.push({ role: "user", content: question.content }, { role: "assistant", content: answer.content });
+    }
+  }
+  return history.slice(-MAX_HISTORY_MESSAGES);
+}
 
 let messageIdCounter = 0;
 function nextMessageId(): string {
@@ -68,9 +92,7 @@ export default function Home() {
     const pendingId = nextMessageId();
     const pendingMessage: ChatMessage = { id: pendingId, role: "assistant", content: "", pending: true };
 
-    const history = messages
-      .filter((message) => message.id !== "welcome" && !message.pending && !message.streaming)
-      .map((message) => ({ role: message.role, content: message.content }));
+    const history = buildHistory(messages);
 
     setMessages((prev) => [...prev, userMessage, pendingMessage]);
 

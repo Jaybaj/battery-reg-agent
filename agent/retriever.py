@@ -124,6 +124,76 @@ def _detect_jurisdiction(question: str) -> str | None:
     return matched[0] if len(matched) == 1 else None
 
 
+_FOLLOW_UP_REFERENCES = re.compile(
+    r"\b(this|that|these|those|it|its|they|them|their|there|same)\b",
+    re.IGNORECASE,
+)
+_FOLLOW_UP_OPENERS = re.compile(r"^\s*(what about|how about|and|also|what if|but)\b", re.IGNORECASE)
+_MAX_FOLLOW_UP_WORDS = 12
+
+_STOPWORDS = frozenset(
+    """
+    a an the and or but if so than then as of for to in on at by with about from into under over
+    what which who whom whose when where why how do does did is are was were be been being
+    can could should would will shall must may might need needs
+    i me my we us our you your he she him her this that these those it its they them their there
+    any all some each tell explain please know want like get have has had also same just
+    """.split()
+)
+
+
+def _is_follow_up(question: str) -> bool:
+    """Short questions that lean on a pronoun or a "what about..." opener.
+
+    Deliberately a cheap heuristic (no LLM call): a false positive only
+    prepends a few extra keywords from the previous question to the search,
+    which hybrid search tolerates well.
+    """
+    if len(re.findall(r"\w+", question)) > _MAX_FOLLOW_UP_WORDS:
+        return False
+    return bool(_FOLLOW_UP_OPENERS.search(question) or _FOLLOW_UP_REFERENCES.search(question))
+
+
+def _key_terms(text: str) -> list[str]:
+    """Content words of `text` in order, minus stopwords/pronouns, deduplicated."""
+    terms: list[str] = []
+    seen: set[str] = set()
+    for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9/.\-]*[A-Za-z0-9]|[A-Za-z0-9]", text):
+        lowered = word.lower()
+        if lowered in _STOPWORDS or lowered in seen:
+            continue
+        seen.add(lowered)
+        terms.append(word)
+    return terms
+
+
+def _rewrite_follow_up(question: str, conversation_history: list[dict[str, Any]] | None) -> str:
+    """Make a follow-up standalone by prepending the previous question's key terms.
+
+    e.g. "What are the battery passport requirements?" then "What about the
+    deadlines for this?" searches for "battery passport requirements: What
+    about the deadlines for this?". If the previous question was itself a
+    follow-up, it's resolved first (recursively, against the history before
+    it), so a chain of follow-ups keeps the original topic.
+    """
+    if not conversation_history or not _is_follow_up(question):
+        return question
+
+    for index in range(len(conversation_history) - 1, -1, -1):
+        turn = conversation_history[index]
+        if turn.get("role") == "user" and isinstance(turn.get("content"), str):
+            previous = _rewrite_follow_up(turn["content"], conversation_history[:index])
+            break
+    else:
+        return question
+
+    question_terms = {term.lower() for term in _key_terms(question)}
+    context_terms = [term for term in _key_terms(previous) if term.lower() not in question_terms]
+    if not context_terms:
+        return question
+    return f"{' '.join(context_terms)}: {question}"
+
+
 def _interleave(result_lists: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
     """Round-robin merge: one result from each list, then a second from each, etc.
 
@@ -157,8 +227,12 @@ def _balanced_search(question: str, top_k: int) -> list[dict[str, Any]]:
     return _interleave(by_jurisdiction)[:top_k]
 
 
-def retrieve(question: str) -> dict[str, Any]:
+def retrieve(question: str, conversation_history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Gather evidence for `question`: ranked chunks, plus curated deadlines.
+
+    Follow-up questions ("what about the deadlines for this?") are rewritten
+    into standalone search queries using the previous user question from
+    `conversation_history` -- see _rewrite_follow_up.
 
     list_deadlines runs on every call, same as the chunk search -- deadlines
     and numeric thresholds are exactly the facts this domain hallucinates
@@ -175,9 +249,13 @@ def retrieve(question: str) -> dict[str, Any]:
     retrieved context gracefully.
     """
     corrected_question, typo_corrections = _autocorrect_typos(question)
-    search_question = corrected_question
+    search_question = _rewrite_follow_up(corrected_question, conversation_history)
+    if search_question != corrected_question:
+        logger.info("Rewrote follow-up %r as %r", corrected_question, search_question)
 
-    jurisdiction = _detect_jurisdiction(search_question)
+    # A jurisdiction named in the follow-up itself ("what about California?")
+    # wins over one carried over from the previous question.
+    jurisdiction = _detect_jurisdiction(corrected_question) or _detect_jurisdiction(search_question)
 
     try:
         if jurisdiction:
@@ -197,6 +275,7 @@ def retrieve(question: str) -> dict[str, Any]:
         typo_note = f"I {interpreted}."
 
     return {
+        "search_query": search_question,
         "jurisdiction_filter": jurisdiction,
         "chunks": chunks,
         "deadlines": deadlines,
