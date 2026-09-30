@@ -125,7 +125,7 @@ export interface Deadline {
   jurisdiction: string;
   instrument: string;
   section_ref: string;
-  deadline_date: string; // ISO date, e.g. "2027-02-18"
+  deadline_date: string | null; // ISO date, e.g. "2027-02-18"; null = current law with no phase-in date
   applies_to: string;
   description: string;
   status?: "in force" | "upcoming";

@@ -233,6 +233,60 @@ DEADLINES: list[dict[str, Any]] = [
         "applies_to": "Stationary battery energy storage systems, LMT batteries, and electric vehicle batteries",
         "description": "Battery management systems must contain up-to-date state-of-health and expected-lifetime data from this date.",
     },
+    # US federal: current codified regulations with no phase-in date. The
+    # ingested eCFR text carries no Federal Register dates, so deadline_date
+    # is None (always in force) rather than an unverified enactment date.
+    # Descriptions are read from the ingested section text.
+    {
+        "topic": "Lithium battery transport (DOT/PHMSA)",
+        "keywords": ["transport", "shipping", "ship", "lithium", "packaging", "dot", "phmsa", "hazmat", "38.3"],
+        "jurisdiction": "US-federal",
+        "instrument": "49 CFR 173.185",
+        "section_ref": "§ 173.185",
+        "deadline_date": None,
+        "applies_to": "All lithium cells and batteries offered for transport, incl. those shipped for disposal or recycling",
+        "description": "In force, no phase-in date. Each lithium cell or battery must be of a type proven to meet UN Manual of Tests and Criteria sub-section 38.3 (§ 173.185(a)), with packaging requirements in § 173.185(b) and specific provisions for smaller cells, batteries shipped for disposal or recycling, prototypes, and damaged, defective or recalled batteries (§ 173.185(c)-(f)).",
+    },
+    {
+        "topic": "Universal waste battery management -- small quantity handlers",
+        "keywords": ["universal waste", "waste management", "leakage", "handler", "small quantity", "recycling"],
+        "jurisdiction": "US-federal",
+        "instrument": "40 CFR Part 273",
+        "section_ref": "§ 273.13",
+        "deadline_date": None,
+        "applies_to": "All small quantity handlers of universal waste batteries (accumulating less than 5,000 kg of universal waste at any time, § 273.9)",
+        "description": "In force, no phase-in date. Universal waste batteries must be managed in a way that prevents releases to the environment; any battery showing evidence of leakage, spillage, or damage that could cause leakage must be contained in a closed, structurally sound, compatible container (§ 273.13(a)).",
+    },
+    {
+        "topic": "Universal waste accumulation limit -- small quantity handlers",
+        "keywords": ["universal waste", "accumulation", "one year", "storage", "handler", "small quantity", "recycling"],
+        "jurisdiction": "US-federal",
+        "instrument": "40 CFR Part 273",
+        "section_ref": "§ 273.15",
+        "deadline_date": None,
+        "applies_to": "All small quantity handlers of universal waste batteries (accumulating less than 5,000 kg of universal waste at any time, § 273.9)",
+        "description": "In force, no phase-in date. Universal waste may be accumulated for no longer than one year from the date it is generated or received from another handler (§ 273.15(a)), unless longer accumulation is solely to facilitate proper recovery, treatment, or disposal, which the handler bears the burden of proving (§ 273.15(b)).",
+    },
+    {
+        "topic": "Universal waste battery management -- large quantity handlers",
+        "keywords": ["universal waste", "waste management", "leakage", "handler", "large quantity", "recycling"],
+        "jurisdiction": "US-federal",
+        "instrument": "40 CFR Part 273",
+        "section_ref": "§ 273.33",
+        "deadline_date": None,
+        "applies_to": "All large quantity handlers of universal waste batteries (accumulating 5,000 kg or more of universal waste at any time, § 273.9)",
+        "description": "In force, no phase-in date. Universal waste batteries must be managed in a way that prevents releases to the environment; any battery showing evidence of leakage, spillage, or damage that could cause leakage must be contained in a closed, structurally sound, compatible container (§ 273.33(a)).",
+    },
+    {
+        "topic": "Universal waste accumulation limit -- large quantity handlers",
+        "keywords": ["universal waste", "accumulation", "one year", "storage", "handler", "large quantity", "recycling"],
+        "jurisdiction": "US-federal",
+        "instrument": "40 CFR Part 273",
+        "section_ref": "§ 273.35",
+        "deadline_date": None,
+        "applies_to": "All large quantity handlers of universal waste batteries (accumulating 5,000 kg or more of universal waste at any time, § 273.9)",
+        "description": "In force, no phase-in date. Universal waste may be accumulated for no longer than one year from the date it is generated or received from another handler (§ 273.35(a)), unless longer accumulation is solely to facilitate proper recovery, treatment, or disposal, which the handler bears the burden of proving (§ 273.35(b)).",
+    },
 ]
 
 _TOKEN = re.compile(r"[a-z0-9]+")
@@ -243,7 +297,8 @@ def _tokens(text: str) -> set[str]:
 
 
 def _with_status(deadline: dict[str, Any], today: date) -> dict[str, Any]:
-    in_force = deadline["deadline_date"] <= today
+    # No date means a current regulation with no phase-in: always in force.
+    in_force = deadline["deadline_date"] is None or deadline["deadline_date"] <= today
     entry = {**deadline, "status": "in force" if in_force else "upcoming"}
     # Several dates apply "or N months after the delegated/implementing act,
     # whichever is latest" -- a passed calendar date alone doesn't prove the
@@ -263,9 +318,10 @@ def list_deadlines(
 ) -> list[dict[str, Any]]:
     """Matching deadlines sorted by urgency, each with a "status" of "in force" or "upcoming".
 
-    Chronological order puts everything already in force first, then
-    upcoming deadlines nearest-first. Status is computed at call time
-    (`today` is overridable for tests), never stored.
+    Undated entries (current law with no phase-in date) come first, then
+    chronological order -- so everything already in force precedes
+    upcoming deadlines, which run nearest-first. Status is computed at call
+    time (`today` is overridable for tests), never stored.
     """
     today = today or date.today()
     matches = DEADLINES
@@ -278,7 +334,8 @@ def list_deadlines(
             for d in matches
             if query_tokens & _tokens(d["topic"]) or query_tokens & _tokens(" ".join(d["keywords"]))
         ]
-    return [_with_status(d, today) for d in sorted(matches, key=lambda d: d["deadline_date"])]
+    ordered = sorted(matches, key=lambda d: (d["deadline_date"] is not None, d["deadline_date"] or date.min))
+    return [_with_status(d, today) for d in ordered]
 
 
 def execute(tool_input: dict[str, Any]) -> str:
@@ -294,5 +351,5 @@ def execute(tool_input: dict[str, Any]) -> str:
             }
         )
 
-    rows = [{**d, "deadline_date": d["deadline_date"].isoformat()} for d in matches]
+    rows = [{**d, "deadline_date": d["deadline_date"] and d["deadline_date"].isoformat()} for d in matches]
     return json.dumps({"deadlines": rows}, ensure_ascii=False)

@@ -33,7 +33,9 @@ _CATEGORY_PATTERNS: dict[str, re.Pattern[str]] = {
     "sli": re.compile(r"\bSLI\b"),
     "stationary": re.compile(r"industrial|stationary battery energy storage", re.IGNORECASE),
 }
-_APPLIES_TO_ALL = re.compile(r"^all (batteries|economic operators)", re.IGNORECASE)
+# "All batteries", "All economic operators", "All lithium cells and batteries",
+# "All small quantity handlers..." -- not specific to one battery category.
+_APPLIES_TO_ALL = re.compile(r"^all\b", re.IGNORECASE)
 _BASE_REF = re.compile(r"^(Article \d+[a-z]?|§\s*[\d.]+)")
 
 
@@ -69,7 +71,7 @@ def build_checklist(
 
     for obligation in base["obligations"]:
         matched = [
-            {**d, "deadline_date": d["deadline_date"].isoformat()}
+            {**d, "deadline_date": d["deadline_date"] and d["deadline_date"].isoformat()}
             for d in deadlines
             if d["jurisdiction"] == obligation["jurisdiction"]
             and _base_ref(d["section_ref"]) == obligation["section_ref"]
@@ -80,7 +82,8 @@ def build_checklist(
             in_force = [d for d in matched if d["status"] == "in force"]
             upcoming = [d for d in matched if d["status"] == "upcoming"]
             urgency = "in_force" if in_force else "upcoming"
-            sort_date = (in_force or upcoming)[0]["deadline_date"]  # list_deadlines is date-sorted
+            # list_deadlines puts undated (current-law) entries first, then by date.
+            sort_date = (in_force or upcoming)[0]["deadline_date"] or ""
             timing_note = None
         elif obligation["jurisdiction"].startswith("US"):
             urgency, sort_date = "in_force", ""

@@ -114,10 +114,11 @@ def _format_deadline(deadline: dict[str, Any]) -> str:
     status = deadline["status"]
     if deadline.get("status_note"):
         status = f"{status} ({deadline['status_note']})"
+    when = deadline["deadline_date"] or "none (current law, no phase-in date)"
     return (
         f"[{deadline['jurisdiction']}] {deadline['instrument']} {deadline['section_ref']} "
         f"-- {deadline['topic']}\n"
-        f"Deadline: {deadline['deadline_date']} -- status: {status} -- applies to: {deadline['applies_to']}\n"
+        f"Deadline: {when} -- status: {status} -- applies to: {deadline['applies_to']}\n"
         f"{deadline['description']}"
     )
 

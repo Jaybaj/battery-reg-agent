@@ -150,7 +150,9 @@ function ChecklistCard({
             <ul className="mt-2 space-y-1 text-sm">
               {item.deadlines.map((deadline) => (
                 <li key={`${deadline.section_ref}-${deadline.deadline_date}`} className="text-slate-600">
-                  <span className="font-medium text-navy">{formatIsoDate(deadline.deadline_date)}</span>
+                  <span className="font-medium text-navy">
+                    {deadline.deadline_date ? formatIsoDate(deadline.deadline_date) : "Current law, no phase-in date"}
+                  </span>
                   <span className="text-slate-400"> · {deadline.section_ref} · </span>
                   {deadline.status === "in force" ? "in force" : "upcoming"}
                   {deadline.status === "in force" && deadline.status_note && (

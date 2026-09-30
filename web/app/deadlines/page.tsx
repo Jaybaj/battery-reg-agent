@@ -25,7 +25,8 @@ const BATTERY_TYPE_PATTERNS: Record<Exclude<BatteryType, "All">, RegExp> = {
   SLI: /\bSLI\b/,
 };
 // Deadlines that apply across the board match every battery type.
-const APPLIES_TO_ALL = /^all (batteries|economic operators)/i;
+// "All batteries", "All economic operators", "All lithium cells and batteries", ...
+const APPLIES_TO_ALL = /^all\b/i;
 
 function matchesBatteryType(deadline: Deadline, type: BatteryType): boolean {
   if (type === "All" || APPLIES_TO_ALL.test(deadline.applies_to)) return true;
@@ -41,7 +42,8 @@ function todayIso(): string {
 
 function isInForce(deadline: Deadline, today: string): boolean {
   // The API computes status; fall back to the date for an older backend.
-  return deadline.status ? deadline.status === "in force" : deadline.deadline_date <= today;
+  if (deadline.status) return deadline.status === "in force";
+  return deadline.deadline_date === null || deadline.deadline_date <= today;
 }
 
 // Curated refs are often sub-provisions ("Article 7(1)(a)", "Article 8(1),
@@ -108,9 +110,13 @@ function TimelineItem({
         aria-hidden
       />
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <time dateTime={deadline.deadline_date} className="text-lg font-semibold text-navy">
-          {formatIsoDate(deadline.deadline_date)}
-        </time>
+        {deadline.deadline_date ? (
+          <time dateTime={deadline.deadline_date} className="text-lg font-semibold text-navy">
+            {formatIsoDate(deadline.deadline_date)}
+          </time>
+        ) : (
+          <span className="text-lg font-semibold text-navy">Current law</span>
+        )}
         <StatusBadge status={inForce ? "in force" : "upcoming"} />
       </div>
 
@@ -169,7 +175,8 @@ export default function DeadlinesPage() {
     () =>
       (deadlines ?? [])
         .filter((d) => matchesJurisdictionFilter(d.jurisdiction, jurisdiction) && matchesBatteryType(d, batteryType))
-        .sort((a, b) => a.deadline_date.localeCompare(b.deadline_date)),
+        // Undated entries (current law, no phase-in date) first, then chronological.
+        .sort((a, b) => (a.deadline_date ?? "").localeCompare(b.deadline_date ?? "")),
     [deadlines, jurisdiction, batteryType],
   );
   const firstUpcomingIndex = visible.findIndex((d) => !isInForce(d, today));
@@ -216,8 +223,8 @@ export default function DeadlinesPage() {
 
               {visible.length === 0 ? (
                 <p className="mt-3 text-sm text-slate-500">
-                  No curated deadlines match these filters. The verified table currently covers EU Battery Regulation
-                  dates only.
+                  No curated deadlines match these filters. The verified table currently covers the EU Battery
+                  Regulation and US federal transport and universal waste rules.
                 </p>
               ) : (
                 <ol className="relative mt-4 space-y-7 border-l-2 border-slate-200 pb-2 pl-0 [&>li]:-ml-[6px]">

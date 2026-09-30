@@ -155,7 +155,10 @@ US_FEDERAL_TRANSPORT = [
 US_FEDERAL_WASTE = [
     ("§ 273.2", "Applicability of the Universal Waste Rule to batteries"),
     ("§ 273.13", "Universal waste battery handling/storage requirements (small quantity handler)"),
+    ("§ 273.15", "One-year accumulation time limit for universal waste (small quantity handler)"),
     ("§ 273.18", "Off-site shipment requirements for universal waste"),
+    ("§ 273.33", "Universal waste battery handling/storage requirements (large quantity handler)"),
+    ("§ 273.35", "One-year accumulation time limit for universal waste (large quantity handler)"),
 ]
 
 
