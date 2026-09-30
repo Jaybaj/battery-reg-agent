@@ -118,3 +118,27 @@ export async function fetchSection(instrument: string, sectionRef: string): Prom
 
   return res.json();
 }
+
+export interface Deadline {
+  topic: string;
+  keywords: string[];
+  jurisdiction: string;
+  instrument: string;
+  section_ref: string;
+  deadline_date: string; // ISO date, e.g. "2027-02-18"
+  applies_to: string;
+  description: string;
+  status?: "in force" | "upcoming";
+  status_note?: string;
+}
+
+export async function fetchDeadlines(): Promise<Deadline[]> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/deadlines`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  } catch {
+    throw new Error(UNREACHABLE_MESSAGE);
+  }
+  if (!res.ok) throw new Error("Could not load deadlines.");
+  return res.json();
+}
