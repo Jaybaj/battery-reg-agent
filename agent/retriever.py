@@ -21,7 +21,7 @@ from itertools import zip_longest
 from typing import Any
 
 from agent.tools.list_deadlines_tool import list_deadlines
-from retrieval.search import hybrid_search, list_jurisdictions
+from retrieval.search import get_section_chunks, hybrid_search, list_jurisdictions
 
 logger = logging.getLogger(__name__)
 
@@ -97,63 +97,197 @@ _OBLIGATION_AREAS: dict[str, tuple[str, ...]] = {
 }
 _AREA_CANDIDATES_PER_QUERY = 4
 
-# Situation-type coverage: questions about transport, waste handling,
-# second-life and recycling use everyday wording ("outside the EU",
-# "repurpose") that ranks recitals above the operative articles, which say
-# "outside the Union", "preparation for repurposing". Each situation adds
-# targeted queries phrased the way the provisions themselves are, tagged
-# with the jurisdiction they target. Tuned against the corpus; the article
-# each query is meant to surface is noted alongside it.
+INSTRUMENT_EU = "Regulation (EU) 2023/1542"
+INSTRUMENT_UWR = "40 CFR Part 273"
+
+# Role detection: who the user is decides which obligations articles apply,
+# however they phrase the question. Each role maps to the provisions written
+# for that role -- Chapter VI of Regulation (EU) 2023/1542 (Articles 38-46,
+# obligations of economic operators) plus the role articles in Chapter VIII
+# (62 distributors, 64 end-users, 65 treatment operators), and the role
+# subparts of 40 CFR Part 273 (B small / C large quantity handlers,
+# E destination facilities, F imports). Those sections are fetched directly,
+# not searched for, so a detected role always brings its article.
+#
+# Patterns take explicit mentions ("I'm an importer") and implicit signals
+# ("we bring batteries in from China", "my warehouse stores and dispatches",
+# "my shop sells").
+_ROLES: dict[str, tuple[re.Pattern[str], tuple[tuple[str, str, str], ...]]] = {
+    "manufacturer": (
+        re.compile(
+            r"\bmanufacturers?\b|\b(I|we) (manufacture|make|produce|build|assemble|develop|design)\b|"
+            # ...but "building a battery recycling facility" is not making batteries.
+            r"\b(manufacturing|producing|assembling|developing|designing|building) (\w+ ){0,4}batter(y|ies)\b"
+            r"(?! (recycling|collection|treatment|charging|swap|storage (facility|site|room)))|"
+            r"\b(my|our) (factory|plant|production line)\b|\bbattery (maker|producer)s?\b",
+            re.IGNORECASE,
+        ),
+        (("EU", INSTRUMENT_EU, "Article 38"),),
+    ),
+    "cell or module supplier": (
+        re.compile(r"\bsuppl(y|ies|ier|iers|ying)\b[^.?!]{0,30}\b(cells?|modules?)\b|\b(cell|module) suppliers?\b", re.IGNORECASE),
+        (("EU", INSTRUMENT_EU, "Article 39"),),
+    ),
+    "authorised representative": (
+        re.compile(
+            r"\bauthori[sz]ed representatives?\b|\b(EU|European|Union) representatives?\b|"
+            r"\brepresentatives? (in|for) the (EU|Union)\b|\bwritten mandate\b",
+            re.IGNORECASE,
+        ),
+        (("EU", INSTRUMENT_EU, "Article 40"),),
+    ),
+    "importer": (
+        re.compile(
+            r"\bimport(s|er|ers|ing|ed)?\b|"
+            r"\bbring(s|ing)?\b[^.?!]{0,40}\b(in|into)\b[^.?!]{0,30}\bfrom\b|"
+            r"\b(sourc|buy|buying|purchas)\w*\b[^.?!]{0,40}\bfrom (China|Korea|Japan|Taiwan|India|Vietnam|abroad|overseas|outside the (EU|Union))\b|"
+            r"\bfrom (China|Korea|Japan|Taiwan|India|Vietnam|abroad|overseas|outside the (EU|Union))\b[^.?!]{0,60}\b(sell|into|to the EU|in the EU)",
+            re.IGNORECASE,
+        ),
+        (("EU", INSTRUMENT_EU, "Article 41"), ("US-federal", INSTRUMENT_UWR, "§ 273.70")),
+    ),
+    "distributor or retailer": (
+        re.compile(
+            r"\bdistribut(or|ors|e|es|ing)\b|\bretail(er|ers|ing)?\b|\bresell\w*|\bwholesal\w*|"
+            r"\b(my|our) (shop|store|outlet)s?\b|\b(shop|store)\b[^.?!]{0,40}\bsell\w*|\bsell\w*\b[^.?!]{0,40}\b(shop|store)\b|"
+            r"\bonline (shop|store|marketplace)\b",
+            re.IGNORECASE,
+        ),
+        (("EU", INSTRUMENT_EU, "Article 42"), ("EU", INSTRUMENT_EU, "Article 62")),
+    ),
+    "fulfilment service provider": (
+        re.compile(
+            r"\bfulfil+ment\b|\bwarehous\w*|\bdispatch\w*|\b(pack|packs|packing)\b[^.?!]{0,40}\b(ship|send|deliver)\w*|"
+            r"\blogistics (provider|company|service|business)\b|\b3PL\b",
+            re.IGNORECASE,
+        ),
+        (("EU", INSTRUMENT_EU, "Article 43"),),
+    ),
+    "own-brand or modifying importer/distributor": (
+        re.compile(
+            r"\b(own|private|white)[- ](brand|label)\w*|\bown (name|trademark)\b|\brebrand\w*|"
+            r"\bunder (our|my|their) (own )?(name|brand|trademark)\b|\bmodif(y|ies|ied|ying)\b[^.?!]{0,40}\b(batter|packs?|cells?)",
+            re.IGNORECASE,
+        ),
+        (("EU", INSTRUMENT_EU, "Article 44"), ("EU", INSTRUMENT_EU, "Article 38")),
+    ),
+    "repurposer or remanufacturer": (
+        re.compile(
+            r"\brepurpos\w*|\bremanufactur\w*|\bsecond[- ]life\b|\brefurbish\w*|\bprepar\w* for re-?use\b|\bre-?us(e|ing) (used|old|waste)",
+            re.IGNORECASE,
+        ),
+        (("EU", INSTRUMENT_EU, "Article 45"),),
+    ),
+    "recycler or treatment operator": (
+        re.compile(
+            r"\brecyclers?\b|\b(recycling|treatment) (facilit\w*|plant|operation|business|company|operators?)\b|"
+            r"\b(run|operate|build|building|set up|open)\w*\b[^.?!]{0,30}\brecycling\b|\bprocess\w*\b[^.?!]{0,40}\bwaste batter",
+            re.IGNORECASE,
+        ),
+        (("EU", INSTRUMENT_EU, "Article 65"), ("US-federal", INSTRUMENT_UWR, "§ 273.60")),
+    ),
+    "waste handler": (
+        re.compile(
+            r"\bwaste handlers?\b|\buniversal waste\b|\bhazardous waste\b|"
+            r"\b(collect|collects|collecting|store|stores|storing|keep|keeps|keeping|accumulat\w*|handl\w*|hold|holding)\b[^.?!]{0,40}\b(old|used|spent|waste|dead|damaged|scrap)\b[^.?!]{0,20}\bbatter",
+            re.IGNORECASE,
+        ),
+        (("US-federal", INSTRUMENT_UWR, "§ 273.13"), ("US-federal", INSTRUMENT_UWR, "§ 273.33")),
+    ),
+    "end user": (
+        re.compile(
+            r"\bend[- ]users?\b|\bconsumers?\b(?! (electronics|batteries|products|goods|devices))|\bhouseholds?\b|\bat home\b|"
+            r"\bI (own|have|bought|use)\b[^.?!]{0,20}\b(a|an|my|some)\b",
+            re.IGNORECASE,
+        ),
+        (("EU", INSTRUMENT_EU, "Article 64"), ("US-federal", INSTRUMENT_UWR, "§ 273.8")),
+    ),
+}
+MAX_CHUNKS_PER_ROLE_SECTION = 2
+SECTIONS_PER_ACTIVITY_QUERY = 2
+
+# Activity-based coverage, the second signal: questions about transport,
+# waste handling, second life, recycling and imports use everyday wording
+# ("outside the EU", "repurpose", "leaked") that ranks recitals above the
+# operative provisions ("outside the Union", "preparation for repurposing",
+# "releases"). Each activity has broad triggers (synonyms and related
+# concepts) and several targeted queries phrased the way the provisions
+# are, tagged with the jurisdiction they target.
 SITUATION_TOP_K = 15
+# Role/activity coverage adds up to this many chunks on top of the base
+# results (e.g. a 15-chunk market-access search) instead of displacing them.
+ROLE_ACTIVITY_EXTRA_CHUNKS = 5
 _SITUATIONS: dict[str, tuple[re.Pattern[str], tuple[tuple[str, str], ...]]] = {
     "transport": (
-        re.compile(r"\b(ship|ships|shipping|transport\w*|carriers?|carriage)\b", re.IGNORECASE),
+        re.compile(
+            r"\b(ship|ships|shipping|shipped|transport\w*|carriers?|carriage|freight|couriers?|haul\w*|deliver\w*|"
+            r"send\w* (\w+ ){0,3}(abroad|overseas)|by (road|air|sea|rail)|air cargo)\b",
+            re.IGNORECASE,
+        ),
         (
-            ("EU", "storage or transport conditions do not jeopardise its compliance"),  # Art 41, 42
-            ("US-federal", "lithium cells and batteries classification packaging transport"),  # § 173.185
+            ("EU", "storage or transport conditions do not jeopardise its compliance"),
+            ("US-federal", "lithium cells and batteries classification packaging transport"),
+            ("US-federal", "off-site shipments of universal waste"),
         ),
     ),
     "waste shipment": (
         re.compile(
-            r"\b(ship\w*|export\w*|send\w*)\b[^.?!]{0,60}\bwaste\b|\bwaste\b[^.?!]{0,60}\b(outside|abroad|third countr\w*|export\w*)",
+            r"\b(ship\w*|export\w*|send\w*|transfer\w*)\b[^.?!]{0,60}\b(waste|old|used|spent|scrap)\b|"
+            r"\b(waste|old|used|spent|scrap)\b[^.?!]{0,60}\b(outside|abroad|overseas|foreign|third countr\w*|export\w*)",
             re.IGNORECASE,
         ),
-        (("EU", "shipment of waste batteries outside the Union"),),  # Art 72
+        (
+            ("EU", "shipment of waste batteries outside the Union"),
+            ("US-federal", "exports of universal waste to a foreign destination"),
+        ),
     ),
     "second life": (
-        re.compile(r"\b(repurpos\w*|second[- ]life|re-?us(e|ing)|remanufactur\w*|refurbish\w*)\b", re.IGNORECASE),
+        re.compile(
+            r"\b(repurpos\w*|second[- ]life|second use|re-?us(e|ed|ing)|remanufactur\w*|refurbish\w*|recondition\w*|repair\w*)\b",
+            re.IGNORECASE,
+        ),
         (
-            ("EU", "preparation for re-use repurposing remanufacturing of batteries obligations"),  # Art 45
-            ("EU", "repurposing waste electric vehicle batteries second life"),  # Art 73
+            ("EU", "preparation for re-use repurposing remanufacturing of batteries obligations"),
+            ("EU", "repurposing waste electric vehicle batteries second life"),
         ),
     ),
     "recycling and treatment": (
         re.compile(
-            r"\b(recycling|treatment) (facilit\w*|plant|operation|business|company)|\brecyclers?\b|"
-            r"\bprocess\w*\b[^.?!]{0,40}\bwaste batteries",
+            # "recycled content" is a product requirement, not a recycling activity.
+            r"\brecycl(e|es|ed|ing|er|ers)?\b(?! content)|\btreatment\b|\brecover\w* (of )?(materials|lithium|cobalt|nickel)|\bshredd\w*|\bblack mass\b|\bdismantl\w*",
             re.IGNORECASE,
         ),
         (
-            ("EU", "obligations of operators of treatment facilities"),  # Art 65
-            ("EU", "treatment of waste batteries removal of all fluids and acids"),  # Art 70
-            ("EU", "treatment and recycling efficiency targets recovery of materials"),  # Art 71
-            ("US-federal", "universal waste battery management handler"),  # § 273.13 / 273.33
+            ("EU", "obligations of operators of treatment facilities"),
+            ("EU", "treatment of waste batteries removal of all fluids and acids"),
+            ("EU", "treatment and recycling efficiency targets recovery of materials"),
+            ("US-federal", "destination facility universal waste recycling"),
         ),
     ),
     "waste handling": (
-        re.compile(r"\b(dispos\w*|end-of-life|spent|take-back|collection|hazardous waste|waste batteries)\b", re.IGNORECASE),
+        re.compile(
+            r"\b(dispos\w*|end-of-life|spent|take-back|take back|collection|collect\w*|hazardous waste|waste batter\w*|"
+            r"leak\w*|spill\w*|damaged|defective|releases?|released|accumulat\w*)\b|"
+            r"\b(stor(e|es|ed|ing|age)|keep(s|ing)?|kept|export\w*)\b[^.?!]{0,40}\b(waste|old|used|spent|dead|damaged)\b|"
+            r"\b(waste|old|used|spent|dead|damaged) batter\w*[^.?!]{0,40}\b(stor(e|es|ed|ing|age)|keep(s|ing)?|kept|export\w*)",
+            re.IGNORECASE,
+        ),
         (
-            ("EU", "collection of waste batteries producers obligations"),  # Art 59-61
-            ("EU", "treatment of waste batteries removal of all fluids and acids"),  # Art 70
-            ("US-federal", "universal waste battery management handler"),  # § 273.13 / 273.33
-            ("US-federal", "off-site shipments of universal waste"),  # § 273.18
+            ("EU", "collection of waste batteries producers obligations"),
+            ("EU", "treatment of waste batteries removal of all fluids and acids"),
+            ("US-federal", "universal waste battery management containment of leaking or damaged batteries"),
+            ("US-federal", "response to releases of universal waste"),
+            ("US-federal", "accumulation time limits for universal waste"),
+            ("US-federal", "labeling and marking of universal waste batteries"),
+            ("US-federal", "off-site shipments of universal waste"),
+            ("US-federal", "exports of universal waste to a foreign destination"),
         ),
     ),
     "imports": (
         re.compile(r"\bimport\w*\b", re.IGNORECASE),
         (
-            ("EU", "obligations of importers"),  # Art 41
-            ("US-federal", "imports of universal waste from a foreign country"),  # § 273.70
+            ("EU", "obligations of importers"),
+            ("US-federal", "imports of universal waste from a foreign country"),
         ),
     ),
 }
@@ -513,43 +647,90 @@ def _merge_unique(chunks: list[dict[str, Any]], limit: int) -> list[dict[str, An
     return merged[:limit]
 
 
+def _roles_for(question: str) -> list[str]:
+    return [name for name, (pattern, _) in _ROLES.items() if pattern.search(question)]
+
+
+def _role_search(roles: list[str], question: str, jurisdiction: str | None) -> list[dict[str, Any]]:
+    """The obligations provisions for each detected role, fetched directly.
+
+    Long articles (Article 38 has 11 chunks) keep the MAX_CHUNKS_PER_ROLE_SECTION
+    chunks sharing the most terms with the question, so the part of the
+    article that answers it comes along rather than just its opening.
+    """
+    targets = list(
+        dict.fromkeys(
+            (instrument, section_ref)
+            for role in roles
+            for target_jurisdiction, instrument, section_ref in _ROLES[role][1]
+            if jurisdiction is None or jurisdiction == target_jurisdiction
+        )
+    )
+    if not targets:
+        return []
+
+    question_terms = {_normalize(term) for term in _key_terms(question)}
+
+    def overlap(chunk: dict[str, Any]) -> int:
+        chunk_terms = {_normalize(word) for word in re.findall(r"[A-Za-z]{3,}", chunk["text"])}
+        return len(question_terms & chunk_terms)
+
+    selected: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=min(8, len(targets))) as executor:
+        futures = [executor.submit(get_section_chunks, instrument, section_ref) for instrument, section_ref in targets]
+        for (_, section_ref), future in zip(targets, futures):
+            try:
+                chunks = future.result()
+            except Exception:
+                logger.exception("Role section lookup failed for %r", section_ref)
+                continue
+            ranked = sorted(chunks, key=overlap, reverse=True)  # stable: ties keep document order
+            selected.extend(ranked[:MAX_CHUNKS_PER_ROLE_SECTION])
+    return selected
+
+
 def _situations_for(question: str) -> list[str]:
     return [name for name, (pattern, _) in _SITUATIONS.items() if pattern.search(question)]
 
 
-def _situation_search(
-    situations: list[str], jurisdiction: str | None
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Run each matched situation's targeted queries: (best chunk per query, second-best per query).
+def _situation_search(situations: list[str], jurisdiction: str | None) -> list[list[dict[str, Any]]]:
+    """One ranked stream of chunks per matched activity, for round-robin merging.
 
-    A query only runs when its jurisdiction fits the question's (an EU-only
-    question skips the US queries and vice versa). Articles/sections are
-    preferred over recitals, as in the obligation-area search.
+    Each targeted query contributes its top SECTIONS_PER_ACTIVITY_QUERY
+    distinct sections (articles/sections before recitals, as in the
+    obligation-area search): the operative provision often ranks second
+    behind a related one, e.g. Article 70 (treatment) behind Article 74
+    (information on waste management). A query only runs when its
+    jurisdiction fits the question's -- an EU-only question skips the US
+    queries and vice versa.
     """
-    queries = list(
-        dict.fromkeys(
+    per_activity = [
+        [
             (query_jurisdiction, query)
-            for name in situations
             for query_jurisdiction, query in _SITUATIONS[name][1]
             if jurisdiction is None or jurisdiction == query_jurisdiction
-        )
-    )
+        ]
+        for name in situations
+    ]
+    queries = list(dict.fromkeys(q for activity in per_activity for q in activity))
     if not queries:
-        return [], []
+        return []
 
+    top_sections: dict[tuple[str, str], list[dict[str, Any]]] = {}
     with ThreadPoolExecutor(max_workers=min(8, len(queries))) as executor:
-        futures = [executor.submit(hybrid_search, query, query_jurisdiction, _AREA_CANDIDATES_PER_QUERY) for query_jurisdiction, query in queries]
-        results = []
-        for (_, query), future in zip(queries, futures):
+        futures = {q: executor.submit(hybrid_search, q[1], q[0], _AREA_CANDIDATES_PER_QUERY) for q in queries}
+        for q, future in futures.items():
             try:
-                results.append(sorted(future.result(), key=_is_recital))  # stable: articles first
+                ranked = sorted(future.result(), key=_is_recital)  # stable: articles first
             except Exception:
-                logger.exception("Situation search failed for %r", query)
-                results.append([])
+                logger.exception("Situation search failed for %r", q[1])
+                ranked = []
+            by_section: dict[str, dict[str, Any]] = {}
+            for chunk in ranked:
+                by_section.setdefault(chunk["section_ref"], chunk)
+            top_sections[q] = list(by_section.values())[:SECTIONS_PER_ACTIVITY_QUERY]
 
-    firsts = [chunks[0] for chunks in results if chunks]
-    seconds = [chunks[1] for chunks in results if len(chunks) > 1]
-    return firsts, seconds
+    return [[chunk for q in activity for chunk in top_sections[q]] for activity in per_activity]
 
 
 def retrieve(question: str, conversation_history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -605,15 +786,25 @@ def retrieve(question: str, conversation_history: list[dict[str, Any]] | None = 
         logger.exception("Retrieval failed for question %r; returning no chunks", search_question)
         chunks = []
 
-    # Situation coverage goes on top of whichever search ran: each targeted
-    # query's best chunk first, then the existing results, then second-bests.
+    # Role and activity coverage go on top of whichever search ran: the
+    # detected roles' own obligations provisions first (the most specific
+    # signal), then the activity streams and the existing results merged
+    # round-robin.
+    roles = _roles_for(search_question)
     situations = _situations_for(search_question)
-    if situations:
+    if roles or situations:
         try:
-            situation_firsts, situation_seconds = _situation_search(situations, jurisdiction)
-            chunks = _merge_unique([*situation_firsts, *chunks, *situation_seconds], max(SITUATION_TOP_K, len(chunks)))
+            role_chunks = _role_search(roles, search_question, jurisdiction) if roles else []
+            activity_streams = _situation_search(situations, jurisdiction) if situations else []
+            # Round-robin across activities, with the base results as one more
+            # stream, so a broad activity (many queries) can't crowd out the
+            # others or the question's own search.
+            chunks = _merge_unique(
+                [*role_chunks, *_interleave([*activity_streams, chunks])],
+                max(SITUATION_TOP_K, len(chunks) + ROLE_ACTIVITY_EXTRA_CHUNKS),
+            )
         except Exception:
-            logger.exception("Situation search failed for question %r; keeping base results", search_question)
+            logger.exception("Role/situation search failed for question %r; keeping base results", search_question)
 
     # Market-access questions get the full deadline table (sorted by urgency):
     # the answer is a roadmap across every obligation area, not one topic.
@@ -628,6 +819,7 @@ def retrieve(question: str, conversation_history: list[dict[str, Any]] | None = 
     return {
         "search_query": search_question,
         "market_access": market_access,
+        "roles": roles,
         "situations": situations,
         "jurisdiction_filter": jurisdiction,
         "chunks": chunks,

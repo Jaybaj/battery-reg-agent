@@ -162,6 +162,14 @@ def list_jurisdictions(dsn: str = DB_DSN) -> list[str]:
             return [row[0] for row in cur.fetchall()]
 
 
+def get_section_chunks(instrument: str, section_ref: str, dsn: str = DB_DSN) -> list[dict[str, Any]]:
+    """All chunks of one article/section, as individual chunk rows."""
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(GET_SECTION_SQL, {"instrument": instrument, "section_ref": section_ref})
+            return [_row_to_dict(cur, row) for row in cur.fetchall()]
+
+
 def get_section(instrument: str, section_ref: str, dsn: str = DB_DSN) -> dict[str, Any] | None:
     """Exact lookup for the full text of a specific article/section.
 
@@ -169,10 +177,7 @@ def get_section(instrument: str, section_ref: str, dsn: str = DB_DSN) -> dict[st
     each carrying a repeated header (chapter/article or part/section line).
     This reassembles them into one flowing text with the header kept once.
     """
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(GET_SECTION_SQL, {"instrument": instrument, "section_ref": section_ref})
-            rows = [_row_to_dict(cur, row) for row in cur.fetchall()]
+    rows = get_section_chunks(instrument, section_ref, dsn)
 
     if not rows:
         return None
