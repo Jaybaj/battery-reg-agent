@@ -13,7 +13,7 @@ const WELCOME_MESSAGE: ChatMessage = {
   role: "assistant",
   content:
     "Welcome to the Battery Regulation Navigator. Ask me anything about battery regulations and " +
-    "battery lifecycle management — from manufacturing and transport to recycling and end-of-life " +
+    "battery lifecycle management, from manufacturing and transport to recycling and end-of-life " +
     "compliance, across any jurisdiction worldwide.",
 };
 
@@ -78,9 +78,28 @@ export default function Home() {
   const [jurisdictionFilter, setJurisdictionFilter] = useState<JurisdictionFilter>("All");
   const [activeSectionChunk, setActiveSectionChunk] = useState<ChunkUsed | null>(null);
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLElement | null>(null);
+  const messageCountRef = useRef(messages.length);
 
+  // A new bubble glides into view with a smooth scroll. While an answer is
+  // streaming in, the view follows it instantly (a smooth scroll per token
+  // would stutter), and only if the reader is already near the bottom -- so
+  // scrolling up to reread something isn't yanked back down.
   useEffect(() => {
-    scrollAnchorRef.current?.scrollIntoView({ behavior: "smooth" });
+    const isNewMessage = messages.length !== messageCountRef.current;
+    messageCountRef.current = messages.length;
+
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    if (isNewMessage) {
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      scrollAnchorRef.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth" });
+      return;
+    }
+
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom < 150) container.scrollTop = container.scrollHeight;
   }, [messages]);
 
   // Each call gets its own user bubble + pending assistant bubble, appended in
@@ -133,6 +152,7 @@ export default function Home() {
       <Header jurisdictionFilter={jurisdictionFilter} onJurisdictionChange={setJurisdictionFilter} />
 
       <main
+        ref={scrollContainerRef}
         className={
           isWelcomeScreen
             ? "relative flex-1 overflow-y-auto bg-[radial-gradient(ellipse_at_center,#f0fdfa_0%,#f9fafb_70%)] px-6 py-6"
@@ -143,12 +163,15 @@ export default function Home() {
 
         <div className="relative z-10 mx-auto flex max-w-3xl flex-col gap-4">
           {messages.map((message) => (
-            <ChatMessageBubble
-              key={message.id}
-              message={message}
-              jurisdictionFilter={jurisdictionFilter}
-              onOpenSection={setActiveSectionChunk}
-            />
+            // The wrapper is keyed by message id, so the fade-in runs once when
+            // a bubble appears -- not again as a pending bubble fills with text.
+            <div key={message.id} className="[animation:message-in_0.3s_ease-out]">
+              <ChatMessageBubble
+                message={message}
+                jurisdictionFilter={jurisdictionFilter}
+                onOpenSection={setActiveSectionChunk}
+              />
+            </div>
           ))}
 
           {isWelcomeScreen && (
@@ -158,7 +181,7 @@ export default function Home() {
                   key={question}
                   type="button"
                   onClick={() => handleSend(question)}
-                  className="rounded-full border border-teal px-4 py-2 text-sm text-teal transition-colors hover:bg-teal hover:text-white"
+                  className="rounded-full border border-teal px-4 py-2 text-sm text-teal transition-all duration-200 hover:scale-[1.03] hover:bg-teal hover:text-white"
                 >
                   {question}
                 </button>

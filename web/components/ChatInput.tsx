@@ -35,14 +35,14 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           onKeyDown={handleKeyDown}
           disabled={disabled}
           placeholder="Ask about any battery regulation..."
-          className="flex-1 rounded-full border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal/20 disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex-1 rounded-full border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 transition-[border-color,background-color,box-shadow] duration-200 focus:border-teal focus:bg-white focus:shadow-[0_0_0_3px_rgba(13,148,136,0.12),0_0_18px_rgba(13,148,136,0.18)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
         />
         <button
           type="button"
           onClick={submit}
           disabled={disabled || !value.trim()}
           aria-label="Send message"
-          className="flex shrink-0 items-center justify-center rounded-full bg-teal p-3 text-white transition-colors hover:bg-teal-dark disabled:cursor-not-allowed disabled:bg-slate-300"
+          className="flex shrink-0 items-center justify-center rounded-full bg-linear-to-br from-teal to-teal-dark p-3 text-white shadow-sm transition-[filter,box-shadow] duration-200 hover:shadow-md hover:brightness-95 disabled:cursor-not-allowed disabled:from-slate-300 disabled:to-slate-300 disabled:shadow-none"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
             <path d="M3.4 20.6 21 12 3.4 3.4 3 10l12 2-12 2z" />

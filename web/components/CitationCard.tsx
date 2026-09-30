@@ -13,7 +13,7 @@ export default function CitationCard({ chunk, onOpen }: CitationCardProps) {
     <button
       type="button"
       onClick={() => onOpen(chunk)}
-      className="group inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs transition-colors hover:border-teal hover:bg-teal-light"
+      className="group inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs shadow-sm transition-all duration-200 hover:-translate-y-px hover:border-teal hover:bg-teal-light hover:shadow-md"
     >
       <span aria-hidden className="text-sm leading-none">
         {jurisdictionFlag(chunk.jurisdiction)}

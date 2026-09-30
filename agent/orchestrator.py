@@ -100,12 +100,13 @@ def _build_model_chain() -> list[ModelAttempt]:
 
 
 def _format_chunk(chunk: dict[str, Any]) -> str:
+    # No URL here: the model can't copy a link it never sees. Citation cards
+    # get their URLs from the API response's chunks_used instead.
     return (
         f"[{chunk['jurisdiction']}] {chunk['instrument']} {chunk['section_ref']} "
-        f"-- {chunk['section_title']}\n"
+        f"-- {chunk['section_title']} ({chunk['source_type']})\n"
         f"{chunk['parent_context']}\n"
-        f"{chunk['text']}\n"
-        f"Source: {chunk['url']} ({chunk['source_type']})"
+        f"{chunk['text']}"
     )
 
 
@@ -193,7 +194,7 @@ def run_agent(
         logger.error("All models in fallback chain failed for question %r", user_message)
         return {"answer": FALLBACK_MESSAGE, "chunks": []}
 
-    answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
+    answer = _strip_urls(re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL)).strip()
     if evidence.get("typo_note"):
         answer = f"{evidence['typo_note']}\n\n{answer}"
 
@@ -257,6 +258,79 @@ def _strip_think_stream(tokens: Iterable[str]) -> Iterator[str]:
         yield from emit(buffer)
 
 
+# Models sometimes put links in the answer body despite the system prompt;
+# citations are shown as cards instead, so links are stripped here.
+_MARKDOWN_LINK = re.compile(r"!?\[([^\]\n]*)\]\([^)\n]*\)")
+# The URL's last character excludes trailing punctuation so "see https://x." keeps
+# its period. One leading space is consumed so no double space is left behind.
+_RAW_URL = re.compile(r"[ \t]?<?https?://[^\s<>]*[^\s<>.,;:!?'\")\]]>?")
+_EMPTY_PARENS = re.compile(r"[ \t]?\(\)")  # left behind by "(https://...)"
+_EXTRA_SPACES = re.compile(r"(?<=\S)[ \t]{2,}(?=\S)")  # between words only, never indentation
+_MAX_PENDING_LINK_CHARS = 500
+
+
+def _strip_urls(text: str) -> str:
+    text = _MARKDOWN_LINK.sub(r"\1", text)
+    text = _RAW_URL.sub("", text)
+    text = _EMPTY_PARENS.sub("", text)
+    return _EXTRA_SPACES.sub(" ", text)
+
+
+def _link_end(text: str) -> int | None:
+    """For `text` starting at a "[": the index just past the markdown link it
+    opens, 0 if it can't be a link, or None if it could still become one."""
+    close = text.find("]")
+    if close == -1 or close == len(text) - 1:
+        return None
+    if text[close + 1] != "(":
+        return 0
+    paren_close = text.find(")", close + 1)
+    return None if paren_close == -1 else paren_close + 1
+
+
+def _strip_urls_stream(tokens: Iterable[str]) -> Iterator[str]:
+    """Streaming equivalent of _strip_urls.
+
+    Text is released up to the start of the last whitespace run: a raw URL
+    never contains whitespace, so everything before that point holds only
+    complete URLs, and the held-back whitespace is still there for _RAW_URL
+    to consume if a URL follows. A markdown link can contain spaces, so a
+    link that's unfinished, or that the cut would split, is held back whole
+    (up to _MAX_PENDING_LINK_CHARS, so a stray "[" can't stall the stream).
+
+    Each piece is cleaned with the previously emitted character prepended as
+    context, so whitespace cleanup at the start of a piece behaves exactly
+    as it would on the whole answer at once.
+    """
+    buffer = ""
+    previous_char = ""
+
+    def clean(piece: str) -> str:
+        return _strip_urls(previous_char + piece)[len(previous_char) :]
+
+    for token in tokens:
+        buffer += token
+        trailing = re.search(r"\s+\S*$", buffer)
+        cut = trailing.start() if trailing else 0
+
+        open_bracket = buffer.rfind("[", 0, cut)
+        if open_bracket != -1 and len(buffer) - open_bracket <= _MAX_PENDING_LINK_CHARS:
+            end = _link_end(buffer[open_bracket:])
+            if end is None or open_bracket + end > cut:
+                cut = open_bracket
+
+        if cut > 0:
+            text = clean(buffer[:cut])
+            previous_char = buffer[cut - 1]
+            buffer = buffer[cut:]
+            if text:
+                yield text
+
+    text = clean(buffer)
+    if text:
+        yield text
+
+
 def _stream_model(client: OpenAI, model: str, messages: list[dict[str, Any]]) -> Iterator[str]:
     stream = client.chat.completions.create(model=model, messages=messages, max_tokens=MAX_TOKENS, stream=True)
     for event in stream:
@@ -295,7 +369,7 @@ def stream_agent(
             print(f"Trying {provider}/{model}...")
             produced_output = False
             try:
-                for text in _strip_think_stream(_stream_model(client, model, messages)):
+                for text in _strip_urls_stream(_strip_think_stream(_stream_model(client, model, messages))):
                     produced_output = True
                     yield text
                 if produced_output:

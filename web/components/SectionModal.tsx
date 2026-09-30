@@ -4,10 +4,65 @@ import { useEffect, useState } from "react";
 import type { ChunkUsed } from "../lib/types";
 import { fetchSection, type SectionDetail } from "../lib/api";
 import { jurisdictionFlag } from "../lib/jurisdiction";
+import { parseSectionText } from "../lib/sectionText";
 
 interface SectionModalProps {
   chunk: ChunkUsed;
   onClose: () => void;
+}
+
+function sourceLinkLabel(url: string): string {
+  let host = "";
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    // Malformed URL -- fall through to the generic label.
+  }
+  if (host.endsWith("eur-lex.europa.eu")) return "View on EUR-Lex";
+  if (host.endsWith("ecfr.gov")) return "View on eCFR";
+  return "View official source";
+}
+
+// Width of the clause-marker column, and the indent per nesting level -- the
+// same value, so a nested marker lines up with its parent clause's text.
+const MARKER_COLUMN_REM = 2.25;
+
+function SectionBody({ section }: { section: SectionDetail }) {
+  const paragraphs = parseSectionText(section.text, section.parent_context);
+
+  return (
+    <div className="space-y-4 text-sm leading-[1.7] text-slate-700">
+      {paragraphs.map((lines, paragraphIndex) => (
+        <div key={paragraphIndex} className="space-y-2">
+          {lines.map((line, lineIndex) => {
+            const indentRem = (line.depth + (line.alignWithClauseText ? 1 : 0)) * MARKER_COLUMN_REM;
+            return (
+              <div key={lineIndex} className="flex" style={{ paddingLeft: `${indentRem}rem` }}>
+                {line.marker && (
+                  <span
+                    className="shrink-0 pr-2 font-medium tabular-nums text-slate-500"
+                    style={{ minWidth: `${MARKER_COLUMN_REM}rem` }}
+                  >
+                    {line.marker}
+                  </span>
+                )}
+                <p className="min-w-0 flex-1">{line.text}</p>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Spinner() {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 py-16 text-sm text-slate-500" role="status">
+      <span className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-teal" aria-hidden />
+      Loading full section text…
+    </div>
+  );
 }
 
 export default function SectionModal({ chunk, onClose }: SectionModalProps) {
@@ -72,19 +127,19 @@ export default function SectionModal({ chunk, onClose }: SectionModalProps) {
           </button>
         </div>
 
-        <div className="overflow-y-auto px-5 py-4">
-          {loading && <p className="text-sm text-slate-500">Loading full section text…</p>}
+        <div className="overflow-y-auto px-6 py-5">
+          {loading && <Spinner />}
           {error && <p className="text-sm text-red-600">{error}</p>}
           {section && (
             <>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{section.text}</p>
+              <SectionBody section={section} />
               <a
                 href={section.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mt-4 inline-block text-sm font-medium text-teal underline decoration-teal/40 underline-offset-2 hover:text-teal-dark"
+                className="mt-6 inline-block text-sm font-medium text-teal underline decoration-teal/40 underline-offset-2 hover:text-teal-dark"
               >
-                View official source ↗
+                {sourceLinkLabel(section.url)} ↗
               </a>
             </>
           )}

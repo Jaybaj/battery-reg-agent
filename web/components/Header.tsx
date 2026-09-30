@@ -11,9 +11,20 @@ export default function Header({ jurisdictionFilter, onJurisdictionChange }: Hea
   return (
     <header className="flex shrink-0 items-center justify-between bg-navy px-6 py-4">
       <div className="flex items-center gap-2.5">
-        <span className="text-xl leading-none" aria-hidden>
-          🔋
-        </span>
+        <svg
+          viewBox="0 0 24 24"
+          className="h-5 w-5 text-teal"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="2" y="7" width="17" height="10" rx="2" />
+          <path d="M22 11v2" />
+          <path d="M6 10v4M9.5 10v4" />
+        </svg>
         <h1 className="text-base font-semibold tracking-tight text-white">
           Battery Regulation Navigator
         </h1>

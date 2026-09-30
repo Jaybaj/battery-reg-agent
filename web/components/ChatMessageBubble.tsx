@@ -26,9 +26,9 @@ export default function ChatMessageBubble({ message, jurisdictionFilter, onOpenS
     return (
       <div className="flex justify-start">
         <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm border border-slate-200/80 bg-white px-4 py-3 shadow-sm">
-          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-teal [animation-delay:-0.3s]" />
-          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-teal [animation-delay:-0.15s]" />
-          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-teal" />
+          <span className="h-1.5 w-1.5 rounded-full bg-teal [animation:dot-pulse_1.4s_ease-in-out_infinite]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-teal [animation:dot-pulse_1.4s_ease-in-out_0.2s_infinite]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-teal [animation:dot-pulse_1.4s_ease-in-out_0.4s_infinite]" />
         </div>
       </div>
     );
