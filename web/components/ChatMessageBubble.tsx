@@ -4,7 +4,7 @@ import type { ChatMessage, ChunkUsed, JurisdictionFilter } from "../lib/types";
 import { matchesJurisdictionFilter } from "../lib/jurisdiction";
 import AnswerMarkdown from "./AnswerMarkdown";
 import CitationCard from "./CitationCard";
-import CopyActions from "./CopyActions";
+import CopyActions, { CopyQuestionButton } from "./CopyActions";
 
 interface ChatMessageBubbleProps {
   message: ChatMessage;
@@ -15,10 +15,12 @@ interface ChatMessageBubbleProps {
 export default function ChatMessageBubble({ message, jurisdictionFilter, onOpenSection }: ChatMessageBubbleProps) {
   if (message.role === "user") {
     return (
-      <div className="flex justify-end">
+      // `group` so the copy button below the bubble reveals on hover (desktop).
+      <div className="group flex flex-col items-end gap-0.5">
         <div className="max-w-[75%] rounded-2xl rounded-br-sm bg-teal px-4 py-2.5 text-[0.925rem] leading-relaxed text-white">
           {message.content}
         </div>
+        <CopyQuestionButton text={message.content} />
       </div>
     );
   }
@@ -53,18 +55,13 @@ export default function ChatMessageBubble({ message, jurisdictionFilter, onOpenS
 
   return (
     <div className="flex justify-start">
-      <div
-        className={
-          "group relative max-w-[85%] rounded-2xl rounded-bl-sm border border-slate-200/80 bg-white px-5 py-4 shadow-sm" +
-          // Copy buttons are always shown on small screens, so leave room above the text for them.
-          (showCopy ? " pt-11 md:pt-4" : "")
-        }
-      >
-        {showCopy && <CopyActions content={message.content} chunks={visibleChunks} />}
+      <div className="group max-w-[85%] rounded-2xl rounded-bl-sm border border-slate-200/80 bg-white px-5 py-4 shadow-sm">
         <AnswerMarkdown content={message.content} />
+        {/* Below the answer text, above the sources. */}
+        {showCopy && <CopyActions content={message.content} chunks={visibleChunks} />}
 
         {allChunks.length > 0 && (
-          <div className="mt-4 border-t border-slate-100 pt-3">
+          <div className={(showCopy ? "mt-2" : "mt-4") + " border-t border-slate-100 pt-3"}>
             <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Sources</p>
             {visibleChunks.length > 0 ? (
               <div className="flex flex-wrap gap-2">
