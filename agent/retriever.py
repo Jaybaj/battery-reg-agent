@@ -28,12 +28,49 @@ logger = logging.getLogger(__name__)
 TOP_K = 5
 MARKET_ACCESS_TOP_K = 15  # coverage matters more than brevity for "what do I need to sell..."
 CHUNKS_PER_OBLIGATION_AREA = 2
+MAX_CHUNKS_PER_SECTION = 2  # so one long, many-chunk section can't fill every slot
 
+# Explicit selling / market-entry phrasing.
 _MARKET_ACCESS = re.compile(
-    r"what do (i|we) need to sell|commerciali[sz]|\bplac(e[sd]?|ing)\b[^.?!]{0,80}?\bon the (\w+ )?market|"
-    r"\blaunch|export(ing)? to|\bsell(ing)? (\w+ ){0,4}in\b|"
-    r"market (my|our) batter",
+    "|".join(
+        [
+            r"what do (i|we) need to sell",
+            r"commerciali[sz]",
+            r"\bplac(e[sd]?|ing)\b[^.?!]{0,80}?\bon the (\w+ )?market",
+            r"\blaunch",
+            r"\bexport(ing|s)? to\b",
+            r"\b(sell|sells|selling|sold) (\w+ ){0,4}(in|into)\b",
+            r"\bsuppl(y|ies|ying)\b[^.?!]{0,60}?\bto\b",
+            r"\bshipping to\b",
+            r"\bbring(ing)? (\w+ ){0,3}to (the )?market",
+            r"\benter(ing)? the (\w+ )?market",
+            r"\bmanufacturers? (\w+ ){0,2}selling",
+            r"market (my|our) batter",
+        ]
+    ),
     re.IGNORECASE,
+)
+
+# A battery category plus a target market ("portable batteries for the EU
+# market", "EV batteries sold in the EU and US") is market access too, even
+# without a selling verb. The market has to be a *destination* ("for/into/to/
+# in/across the EU", "EU market"), so lookups that merely name the regulation
+# ("EV batteries under the EU Battery Regulation") don't qualify.
+_BATTERY_TYPE = re.compile(
+    r"\b(portable|LMT|e-?bikes?|e-?scooters?|industrial|EVs?|electric vehicles?|SLI|stationary|"
+    r"energy storage|BESS|battery (packs?|cells?|modules?))\b",
+    re.IGNORECASE,
+)
+# Waste-handling *activity*, not just a mention of end-of-life: "from
+# manufacturing through end-of-life" is still a product lifecycle question.
+_END_OF_LIFE = re.compile(
+    r"\b(recycling (facility|plant|business|operation|company)|recyclers?|dispos(e|ing|al) of|"
+    r"waste batteries|take-back|collection scheme)\b",
+    re.IGNORECASE,
+)
+_TARGET_MARKET = re.compile(
+    r"\b(for|into|to|in|across|within) (the )?(EU|European Union|Europe|US|U\.S\.|USA|United States|"
+    r"California|Washington|New Jersey|Illinois)\b|\b(EU|US|European|American|global) market\b"
 )
 
 # Checklist of obligation areas for market-access questions: each is searched
@@ -59,6 +96,67 @@ _OBLIGATION_AREAS: dict[str, tuple[str, ...]] = {
     "producer registration and EPR": ("producer registration extended producer responsibility",),
 }
 _AREA_CANDIDATES_PER_QUERY = 4
+
+# Situation-type coverage: questions about transport, waste handling,
+# second-life and recycling use everyday wording ("outside the EU",
+# "repurpose") that ranks recitals above the operative articles, which say
+# "outside the Union", "preparation for repurposing". Each situation adds
+# targeted queries phrased the way the provisions themselves are, tagged
+# with the jurisdiction they target. Tuned against the corpus; the article
+# each query is meant to surface is noted alongside it.
+SITUATION_TOP_K = 15
+_SITUATIONS: dict[str, tuple[re.Pattern[str], tuple[tuple[str, str], ...]]] = {
+    "transport": (
+        re.compile(r"\b(ship|ships|shipping|transport\w*|carriers?|carriage)\b", re.IGNORECASE),
+        (
+            ("EU", "storage or transport conditions do not jeopardise its compliance"),  # Art 41, 42
+            ("US-federal", "lithium cells and batteries classification packaging transport"),  # § 173.185
+        ),
+    ),
+    "waste shipment": (
+        re.compile(
+            r"\b(ship\w*|export\w*|send\w*)\b[^.?!]{0,60}\bwaste\b|\bwaste\b[^.?!]{0,60}\b(outside|abroad|third countr\w*|export\w*)",
+            re.IGNORECASE,
+        ),
+        (("EU", "shipment of waste batteries outside the Union"),),  # Art 72
+    ),
+    "second life": (
+        re.compile(r"\b(repurpos\w*|second[- ]life|re-?us(e|ing)|remanufactur\w*|refurbish\w*)\b", re.IGNORECASE),
+        (
+            ("EU", "preparation for re-use repurposing remanufacturing of batteries obligations"),  # Art 45
+            ("EU", "repurposing waste electric vehicle batteries second life"),  # Art 73
+        ),
+    ),
+    "recycling and treatment": (
+        re.compile(
+            r"\b(recycling|treatment) (facilit\w*|plant|operation|business|company)|\brecyclers?\b|"
+            r"\bprocess\w*\b[^.?!]{0,40}\bwaste batteries",
+            re.IGNORECASE,
+        ),
+        (
+            ("EU", "obligations of operators of treatment facilities"),  # Art 65
+            ("EU", "treatment of waste batteries removal of all fluids and acids"),  # Art 70
+            ("EU", "treatment and recycling efficiency targets recovery of materials"),  # Art 71
+            ("US-federal", "universal waste battery management handler"),  # § 273.13 / 273.33
+        ),
+    ),
+    "waste handling": (
+        re.compile(r"\b(dispos\w*|end-of-life|spent|take-back|collection|hazardous waste|waste batteries)\b", re.IGNORECASE),
+        (
+            ("EU", "collection of waste batteries producers obligations"),  # Art 59-61
+            ("EU", "treatment of waste batteries removal of all fluids and acids"),  # Art 70
+            ("US-federal", "universal waste battery management handler"),  # § 273.13 / 273.33
+            ("US-federal", "off-site shipments of universal waste"),  # § 273.18
+        ),
+    ),
+    "imports": (
+        re.compile(r"\bimport\w*\b", re.IGNORECASE),
+        (
+            ("EU", "obligations of importers"),  # Art 41
+            ("US-federal", "imports of universal waste from a foreign country"),  # § 273.70
+        ),
+    ),
+}
 
 _DEADLINE_KEYWORDS = re.compile(
     r"\b(deadline|by when|timeline|phase-?in|effective date|compliance date|"
@@ -135,26 +233,48 @@ def _autocorrect_typos(question: str) -> tuple[str, list[tuple[str, str]]]:
     return corrected, corrections
 
 
-_JURISDICTION_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "EU": ("eu", "european union", "europe"),
-    "US-federal": ("us federal", "u.s. federal", "federal", "dot", "phmsa", "epa"),
-    "US-CA": ("california",),
-    "US-WA": ("washington state", "washington"),
-    "US-NJ": ("new jersey",),
-    "US-IL": ("illinois",),
+# Whole-word patterns: plain substring matching found "epa" in "separate",
+# "dot" in "anecdote" and "eu" in "neutral". Acronyms that collide with
+# ordinary words ("US" vs "us", "DOT", "EPA") are matched case-sensitively;
+# everything else ignores case.
+_JURISDICTION_PATTERNS: dict[str, re.Pattern[str]] = {
+    "EU": re.compile(r"(?i:\bEU\b|\beuropean union\b|\beurope(an)?\b)"),
+    "US-federal": re.compile(
+        r"\bUS\b|\bU\.S\.|\bUSA\b|\bDOT\b|\bEPA\b|\bPHMSA\b|(?i:\bunited states\b|\bfederal\b)"
+    ),
+    "US-CA": re.compile(r"(?i:\bcalifornia\b)"),
+    "US-WA": re.compile(r"(?i:\bwashington\b)"),
+    "US-NJ": re.compile(r"(?i:\bnew jersey\b)"),
+    "US-IL": re.compile(r"(?i:\billinois\b)"),
 }
 
 
 def _detect_jurisdiction(question: str) -> str | None:
     """Return a single jurisdiction filter only when exactly one is unambiguously named.
 
-    Any other case (none named, or several named for a comparison) is left
-    unfiltered so retrieval covers the whole corpus rather than risking an
-    over-narrow filter on a mixed-jurisdiction question.
+    Any other case (none named, or several named, e.g. "selling in the EU
+    and US") is left unfiltered so retrieval covers the whole corpus rather
+    than risking an over-narrow filter on a mixed-jurisdiction question.
     """
-    lowered = question.lower()
-    matched = [code for code, keywords in _JURISDICTION_KEYWORDS.items() if any(kw in lowered for kw in keywords)]
+    matched = [code for code, pattern in _JURISDICTION_PATTERNS.items() if pattern.search(question)]
     return matched[0] if len(matched) == 1 else None
+
+
+def _searchable_jurisdiction(jurisdiction: str | None) -> str | None:
+    """Map a detected jurisdiction onto one the corpus actually has chunks for.
+
+    US states have no ingested laws yet, so filtering to "US-CA" would return
+    nothing at all; searching US federal instead still surfaces the federal
+    rules that apply in every state. Anything else unknown is left unfiltered.
+    """
+    if jurisdiction is None:
+        return None
+    available = set(list_jurisdictions())
+    if jurisdiction in available:
+        return jurisdiction
+    if jurisdiction.startswith("US-") and "US-federal" in available:
+        return "US-federal"
+    return None
 
 
 _FOLLOW_UP_REFERENCES = re.compile(
@@ -293,18 +413,47 @@ def _balanced_search(question: str, top_k: int) -> list[dict[str, Any]]:
     """
     jurisdictions = list_jurisdictions()
     if not jurisdictions:
-        return hybrid_search(question, top_k=top_k)
+        return _diverse_search(question, None, top_k)
 
     per_jurisdiction_k = max(1, math.ceil(top_k / len(jurisdictions)))
     with ThreadPoolExecutor(max_workers=len(jurisdictions)) as executor:
-        futures = [executor.submit(hybrid_search, question, j, per_jurisdiction_k) for j in jurisdictions]
+        futures = [executor.submit(_diverse_search, question, j, per_jurisdiction_k) for j in jurisdictions]
         by_jurisdiction = [future.result() for future in futures]
 
     return _interleave(by_jurisdiction)[:top_k]
 
 
+def _diverse_search(question: str, jurisdiction: str | None, top_k: int) -> list[dict[str, Any]]:
+    """hybrid_search, capped at MAX_CHUNKS_PER_SECTION chunks per section.
+
+    Long sections are split into many chunks (§ 173.185 has 9), and without
+    a cap they can fill every slot -- a US lifecycle question came back as
+    five pieces of § 173.185 and nothing from Part 273. Over-fetching and
+    capping keeps the best chunks while leaving room for other sections.
+    """
+    candidates = hybrid_search(question, jurisdiction=jurisdiction, top_k=top_k * 3)
+    per_section: dict[tuple[str, str], int] = {}
+    selected: list[dict[str, Any]] = []
+    for chunk in candidates:
+        key = (chunk["instrument"], chunk["section_ref"])
+        if per_section.get(key, 0) >= MAX_CHUNKS_PER_SECTION:
+            continue
+        per_section[key] = per_section.get(key, 0) + 1
+        selected.append(chunk)
+        if len(selected) == top_k:
+            break
+    return selected
+
+
 def _is_market_access(question: str) -> bool:
-    return bool(_MARKET_ACCESS.search(question))
+    if _MARKET_ACCESS.search(question):
+        return True
+    # A battery type + market that's about waste handling ("recycling facility
+    # for EV batteries in the EU") needs end-of-life provisions, not the
+    # product-placement checklist.
+    if _END_OF_LIFE.search(question):
+        return False
+    return bool(_BATTERY_TYPE.search(question) and _TARGET_MARKET.search(question))
 
 
 def _obligation_area_search(question: str, jurisdiction: str | None) -> list[dict[str, Any]]:
@@ -324,7 +473,7 @@ def _obligation_area_search(question: str, jurisdiction: str | None) -> list[dic
             for area, queries in _OBLIGATION_AREAS.items()
         }
         if jurisdiction:
-            question_future = executor.submit(hybrid_search, question, jurisdiction, TOP_K)
+            question_future = executor.submit(_diverse_search, question, jurisdiction, TOP_K)
         else:
             question_future = executor.submit(_balanced_search, question, TOP_K)
 
@@ -336,24 +485,71 @@ def _obligation_area_search(question: str, jurisdiction: str | None) -> list[dic
                 # One failing area shouldn't cost the answer its other areas.
                 logger.exception("Obligation-area search failed for %r", area)
                 candidates = []
-            candidates.sort(key=lambda chunk: chunk["section_ref"].startswith("Recital"))  # stable
+            candidates.sort(key=_is_recital)  # stable: articles first
             unique = list({chunk["id"]: chunk for chunk in reversed(candidates)}.values())[::-1]
             by_area.append(unique[:CHUNKS_PER_OBLIGATION_AREA])
         question_hits = question_future.result()
 
     firsts = [chunks[0] for chunks in by_area if chunks]
     rest = [chunk for chunks in by_area for chunk in chunks[1:]]
-    question_provisions = [c for c in question_hits if not c["section_ref"].startswith("Recital")]
-    question_recitals = [c for c in question_hits if c["section_ref"].startswith("Recital")]
+    question_provisions = [c for c in question_hits if not _is_recital(c)]
+    question_recitals = [c for c in question_hits if _is_recital(c)]
+    return _merge_unique([*firsts, *question_provisions, *rest, *question_recitals], MARKET_ACCESS_TOP_K)
 
+
+def _is_recital(chunk: dict[str, Any]) -> bool:
+    return chunk["section_ref"].startswith("Recital")
+
+
+def _merge_unique(chunks: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """First occurrence of each chunk id, in the given priority order, up to `limit`."""
     merged: list[dict[str, Any]] = []
     seen_ids: set[Any] = set()
-    for chunk in [*firsts, *question_provisions, *rest, *question_recitals]:
+    for chunk in chunks:
         if chunk["id"] in seen_ids:
             continue
         seen_ids.add(chunk["id"])
         merged.append(chunk)
-    return merged[:MARKET_ACCESS_TOP_K]
+    return merged[:limit]
+
+
+def _situations_for(question: str) -> list[str]:
+    return [name for name, (pattern, _) in _SITUATIONS.items() if pattern.search(question)]
+
+
+def _situation_search(
+    situations: list[str], jurisdiction: str | None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Run each matched situation's targeted queries: (best chunk per query, second-best per query).
+
+    A query only runs when its jurisdiction fits the question's (an EU-only
+    question skips the US queries and vice versa). Articles/sections are
+    preferred over recitals, as in the obligation-area search.
+    """
+    queries = list(
+        dict.fromkeys(
+            (query_jurisdiction, query)
+            for name in situations
+            for query_jurisdiction, query in _SITUATIONS[name][1]
+            if jurisdiction is None or jurisdiction == query_jurisdiction
+        )
+    )
+    if not queries:
+        return [], []
+
+    with ThreadPoolExecutor(max_workers=min(8, len(queries))) as executor:
+        futures = [executor.submit(hybrid_search, query, query_jurisdiction, _AREA_CANDIDATES_PER_QUERY) for query_jurisdiction, query in queries]
+        results = []
+        for (_, query), future in zip(queries, futures):
+            try:
+                results.append(sorted(future.result(), key=_is_recital))  # stable: articles first
+            except Exception:
+                logger.exception("Situation search failed for %r", query)
+                results.append([])
+
+    firsts = [chunks[0] for chunks in results if chunks]
+    seconds = [chunks[1] for chunks in results if len(chunks) > 1]
+    return firsts, seconds
 
 
 def retrieve(question: str, conversation_history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -393,20 +589,31 @@ def retrieve(question: str, conversation_history: list[dict[str, Any]] | None = 
     market_access = _is_market_access(search_question)
 
     try:
+        jurisdiction = _searchable_jurisdiction(jurisdiction)
         # The obligation-area checklist mirrors the EU Battery Regulation's
         # structure; searching it under a US filter would return near-miss
         # matches, so other jurisdictions get a wider plain search instead.
         if market_access and jurisdiction in (None, "EU"):
             chunks = _obligation_area_search(search_question, jurisdiction)
         elif market_access:
-            chunks = hybrid_search(search_question, jurisdiction=jurisdiction, top_k=MARKET_ACCESS_TOP_K)
+            chunks = _diverse_search(search_question, jurisdiction, MARKET_ACCESS_TOP_K)
         elif jurisdiction:
-            chunks = hybrid_search(search_question, jurisdiction=jurisdiction, top_k=TOP_K)
+            chunks = _diverse_search(search_question, jurisdiction, TOP_K)
         else:
             chunks = _balanced_search(search_question, TOP_K)
     except Exception:
         logger.exception("Retrieval failed for question %r; returning no chunks", search_question)
         chunks = []
+
+    # Situation coverage goes on top of whichever search ran: each targeted
+    # query's best chunk first, then the existing results, then second-bests.
+    situations = _situations_for(search_question)
+    if situations:
+        try:
+            situation_firsts, situation_seconds = _situation_search(situations, jurisdiction)
+            chunks = _merge_unique([*situation_firsts, *chunks, *situation_seconds], max(SITUATION_TOP_K, len(chunks)))
+        except Exception:
+            logger.exception("Situation search failed for question %r; keeping base results", search_question)
 
     # Market-access questions get the full deadline table (sorted by urgency):
     # the answer is a roadmap across every obligation area, not one topic.
@@ -421,6 +628,7 @@ def retrieve(question: str, conversation_history: list[dict[str, Any]] | None = 
     return {
         "search_query": search_question,
         "market_access": market_access,
+        "situations": situations,
         "jurisdiction_filter": jurisdiction,
         "chunks": chunks,
         "deadlines": deadlines,

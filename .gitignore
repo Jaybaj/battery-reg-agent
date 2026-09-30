@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Eval run outputs (evals/run_evals.py)
+evals/results_*.json

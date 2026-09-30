@@ -37,7 +37,10 @@ BM25_SQL = f"""
     LIMIT %(limit)s
 """
 
-_TSQUERY_TOKEN = re.compile(r"\w+")
+# Dotted numbers stay whole: Postgres indexes "§ 273.13" as the single lexeme
+# '273.13', so splitting it into 273 | 13 could never match that section and
+# instead matched every chunk mentioning part 273 or "13".
+_TSQUERY_TOKEN = re.compile(r"\d+(?:\.\d+)+|\w+")
 
 
 def _to_bm25_tsquery(query: str) -> str | None:
