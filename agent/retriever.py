@@ -26,6 +26,39 @@ from retrieval.search import hybrid_search, list_jurisdictions
 logger = logging.getLogger(__name__)
 
 TOP_K = 5
+MARKET_ACCESS_TOP_K = 15  # coverage matters more than brevity for "what do I need to sell..."
+CHUNKS_PER_OBLIGATION_AREA = 2
+
+_MARKET_ACCESS = re.compile(
+    r"what do (i|we) need to sell|commerciali[sz]|place[sd]? (\w+ ){0,3}on the (\w+ )?market|"
+    r"placing (\w+ ){0,3}on the (\w+ )?market|\blaunch|export(ing)? to|\bsell(ing)? (\w+ ){0,4}in\b|"
+    r"market (my|our) batter",
+    re.IGNORECASE,
+)
+
+# Checklist of obligation areas for market-access questions: each is searched
+# separately so an answer covers every area, not just whichever ones happen
+# to rank highest for the question's wording. Queries are phrased the way
+# the regulation itself words each area (tuned against the corpus -- e.g.
+# plain "restrictions on substances" ranks Article 86's restriction
+# *procedure* above Article 6's actual restrictions). An area with several
+# queries takes the best chunk from each.
+_OBLIGATION_AREAS: dict[str, tuple[str, ...]] = {
+    "substance restrictions": ("batteries shall not contain substances restricted in Annex I",),
+    "carbon footprint": ("carbon footprint declaration of batteries",),
+    "recycled content": ("recycled content in industrial, SLI and electric vehicle batteries",),
+    "performance and durability": ("electrochemical performance and durability requirements",),
+    "removability and replaceability": ("removability and replaceability of portable and LMT batteries",),
+    "labelling and marking": ("labelling and marking of batteries information requirements",),
+    "battery passport": ("battery passport electronic record",),
+    "conformity assessment and CE marking": (
+        "conformity assessment procedures for batteries",
+        "EU declaration of conformity CE marking",
+    ),
+    "due diligence": ("economic operators placing batteries on the market battery due diligence obligations",),
+    "producer registration and EPR": ("producer registration extended producer responsibility",),
+}
+_AREA_CANDIDATES_PER_QUERY = 4
 
 _DEADLINE_KEYWORDS = re.compile(
     r"\b(deadline|by when|timeline|phase-?in|effective date|compliance date|"
@@ -270,12 +303,69 @@ def _balanced_search(question: str, top_k: int) -> list[dict[str, Any]]:
     return _interleave(by_jurisdiction)[:top_k]
 
 
+def _is_market_access(question: str) -> bool:
+    return bool(_MARKET_ACCESS.search(question))
+
+
+def _obligation_area_search(question: str, jurisdiction: str | None) -> list[dict[str, Any]]:
+    """Targeted retrieval across every obligation area, merged with the question's own search.
+
+    Each area keeps its top CHUNKS_PER_OBLIGATION_AREA chunks, preferring
+    articles/sections over recitals (recitals are interpretive context, not
+    obligations). Order of priority when filling MARKET_ACCESS_TOP_K: the
+    best chunk from each area (so every area is represented), then the
+    question's own article/section hits (whatever is specific to its
+    wording), then each area's second chunk, then the question's recital
+    hits. Duplicates are dropped by id.
+    """
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        area_futures = {
+            area: [executor.submit(hybrid_search, query, jurisdiction, _AREA_CANDIDATES_PER_QUERY) for query in queries]
+            for area, queries in _OBLIGATION_AREAS.items()
+        }
+        if jurisdiction:
+            question_future = executor.submit(hybrid_search, question, jurisdiction, TOP_K)
+        else:
+            question_future = executor.submit(_balanced_search, question, TOP_K)
+
+        by_area: list[list[dict[str, Any]]] = []
+        for area, futures in area_futures.items():
+            try:
+                candidates = _interleave([future.result() for future in futures])
+            except Exception:
+                # One failing area shouldn't cost the answer its other areas.
+                logger.exception("Obligation-area search failed for %r", area)
+                candidates = []
+            candidates.sort(key=lambda chunk: chunk["section_ref"].startswith("Recital"))  # stable
+            unique = list({chunk["id"]: chunk for chunk in reversed(candidates)}.values())[::-1]
+            by_area.append(unique[:CHUNKS_PER_OBLIGATION_AREA])
+        question_hits = question_future.result()
+
+    firsts = [chunks[0] for chunks in by_area if chunks]
+    rest = [chunk for chunks in by_area for chunk in chunks[1:]]
+    question_provisions = [c for c in question_hits if not c["section_ref"].startswith("Recital")]
+    question_recitals = [c for c in question_hits if c["section_ref"].startswith("Recital")]
+
+    merged: list[dict[str, Any]] = []
+    seen_ids: set[Any] = set()
+    for chunk in [*firsts, *question_provisions, *rest, *question_recitals]:
+        if chunk["id"] in seen_ids:
+            continue
+        seen_ids.add(chunk["id"])
+        merged.append(chunk)
+    return merged[:MARKET_ACCESS_TOP_K]
+
+
 def retrieve(question: str, conversation_history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Gather evidence for `question`: ranked chunks, plus curated deadlines.
 
     Follow-up questions ("what about the deadlines for this?") are rewritten
     into standalone search queries using the previous user question from
     `conversation_history` -- see _rewrite_follow_up.
+
+    Market-access questions ("what do I need to sell X in the EU?") search
+    each obligation area separately and return up to MARKET_ACCESS_TOP_K
+    chunks -- see _obligation_area_search.
 
     list_deadlines runs on every call, same as the chunk search -- deadlines
     and numeric thresholds are exactly the facts this domain hallucinates
@@ -300,8 +390,17 @@ def retrieve(question: str, conversation_history: list[dict[str, Any]] | None = 
     # wins over one carried over from the previous question.
     jurisdiction = _detect_jurisdiction(corrected_question) or _detect_jurisdiction(search_question)
 
+    market_access = _is_market_access(search_question)
+
     try:
-        if jurisdiction:
+        # The obligation-area checklist mirrors the EU Battery Regulation's
+        # structure; searching it under a US filter would return near-miss
+        # matches, so other jurisdictions get a wider plain search instead.
+        if market_access and jurisdiction in (None, "EU"):
+            chunks = _obligation_area_search(search_question, jurisdiction)
+        elif market_access:
+            chunks = hybrid_search(search_question, jurisdiction=jurisdiction, top_k=MARKET_ACCESS_TOP_K)
+        elif jurisdiction:
             chunks = hybrid_search(search_question, jurisdiction=jurisdiction, top_k=TOP_K)
         else:
             chunks = _balanced_search(search_question, TOP_K)
@@ -309,7 +408,9 @@ def retrieve(question: str, conversation_history: list[dict[str, Any]] | None = 
         logger.exception("Retrieval failed for question %r; returning no chunks", search_question)
         chunks = []
 
-    deadline_topic = None if _DEADLINE_KEYWORDS.search(search_question) else search_question
+    # Market-access questions get the full deadline table (sorted by urgency):
+    # the answer is a roadmap across every obligation area, not one topic.
+    deadline_topic = None if market_access or _DEADLINE_KEYWORDS.search(search_question) else search_question
     deadlines = list_deadlines(topic=deadline_topic, jurisdiction=jurisdiction)
 
     typo_note = None
@@ -319,6 +420,7 @@ def retrieve(question: str, conversation_history: list[dict[str, Any]] | None = 
 
     return {
         "search_query": search_question,
+        "market_access": market_access,
         "jurisdiction_filter": jurisdiction,
         "chunks": chunks,
         "deadlines": deadlines,

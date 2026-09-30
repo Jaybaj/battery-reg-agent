@@ -34,14 +34,39 @@
   }
 }
 
-@keyframes message-in {
+@keyframes message-fade {
   from {
     opacity: 0;
-    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes message-rise {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
   }
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* Applied only while a message is entering (removed on animationend), so
+   will-change doesn't pin a compositing layer on every message for good.
+   Mobile gets an opacity-only fade: transforms on text there can flicker as
+   the layer is promoted and demoted. */
+.message-enter {
+  animation: message-fade 0.25s ease-out both;
+  will-change: opacity;
+}
+
+@media (min-width: 768px) {
+  .message-enter {
+    animation-name: message-rise;
+    will-change: opacity, transform;
   }
 }
 

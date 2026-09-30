@@ -242,7 +242,32 @@ def _tokens(text: str) -> set[str]:
     return set(_TOKEN.findall(text.lower()))
 
 
-def list_deadlines(topic: str | None = None, jurisdiction: str | None = None) -> list[dict[str, Any]]:
+def _with_status(deadline: dict[str, Any], today: date) -> dict[str, Any]:
+    in_force = deadline["deadline_date"] <= today
+    entry = {**deadline, "status": "in force" if in_force else "upcoming"}
+    # Several dates apply "or N months after the delegated/implementing act,
+    # whichever is latest" -- a passed calendar date alone doesn't prove the
+    # obligation already applies, so say so rather than overstating it.
+    if in_force and "whichever is latest" in deadline["description"]:
+        entry["status_note"] = (
+            "Calendar date has passed, but this applies only once the related delegated/implementing "
+            "act condition is also met -- check whether that act has been adopted."
+        )
+    return entry
+
+
+def list_deadlines(
+    topic: str | None = None,
+    jurisdiction: str | None = None,
+    today: date | None = None,
+) -> list[dict[str, Any]]:
+    """Matching deadlines sorted by urgency, each with a "status" of "in force" or "upcoming".
+
+    Chronological order puts everything already in force first, then
+    upcoming deadlines nearest-first. Status is computed at call time
+    (`today` is overridable for tests), never stored.
+    """
+    today = today or date.today()
     matches = DEADLINES
     if jurisdiction:
         matches = [d for d in matches if d["jurisdiction"] == jurisdiction]
@@ -253,7 +278,7 @@ def list_deadlines(topic: str | None = None, jurisdiction: str | None = None) ->
             for d in matches
             if query_tokens & _tokens(d["topic"]) or query_tokens & _tokens(" ".join(d["keywords"]))
         ]
-    return matches
+    return [_with_status(d, today) for d in sorted(matches, key=lambda d: d["deadline_date"])]
 
 
 def execute(tool_input: dict[str, Any]) -> str:

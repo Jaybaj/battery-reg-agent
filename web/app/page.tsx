@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Header from "../components/Header";
 import ChatMessageBubble from "../components/ChatMessageBubble";
 import ChatInput from "../components/ChatInput";
@@ -55,6 +55,23 @@ function nextMessageId(): string {
   return `msg-${messageIdCounter}`;
 }
 
+// Fades its children in on mount, then drops the animation class (and its
+// will-change) once the animation ends.
+function MessageEnter({ children }: { children: ReactNode }) {
+  const [entering, setEntering] = useState(true);
+  return (
+    <div
+      className={entering ? "message-enter" : undefined}
+      onAnimationEnd={(event) => {
+        // Ignore animations bubbling up from inside (e.g. the typing dots).
+        if (event.target === event.currentTarget) setEntering(false);
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 function BatteryWatermark() {
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
@@ -77,14 +94,21 @@ export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [jurisdictionFilter, setJurisdictionFilter] = useState<JurisdictionFilter>("All");
   const [activeSectionChunk, setActiveSectionChunk] = useState<ChunkUsed | null>(null);
-  const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const messageCountRef = useRef(messages.length);
+  const glideEndsAtRef = useRef(0);
+  const glideTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // A new bubble glides into view with a smooth scroll. While an answer is
   // streaming in, the view follows it instantly (a smooth scroll per token
   // would stutter), and only if the reader is already near the bottom -- so
   // scrolling up to reread something isn't yanked back down.
+  //
+  // Only the chat container is scrolled (scrollIntoView can also scroll the
+  // page itself on mobile, shifting the whole layout). And while a glide is in
+  // progress, streaming updates leave the scroll alone rather than cutting it
+  // off or measuring "near bottom" mid-flight; one catch-up when it ends
+  // accounts for any text that arrived during it.
   useEffect(() => {
     const isNewMessage = messages.length !== messageCountRef.current;
     messageCountRef.current = messages.length;
@@ -94,13 +118,25 @@ export default function Home() {
 
     if (isNewMessage) {
       const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      scrollAnchorRef.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth" });
+      container.scrollTo({ top: container.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
+      if (reduceMotion) return;
+
+      const GLIDE_MS = 500;
+      glideEndsAtRef.current = Date.now() + GLIDE_MS;
+      clearTimeout(glideTimerRef.current);
+      glideTimerRef.current = setTimeout(() => {
+        container.scrollTop = container.scrollHeight;
+      }, GLIDE_MS);
       return;
     }
+
+    if (Date.now() < glideEndsAtRef.current) return;
 
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     if (distanceFromBottom < 150) container.scrollTop = container.scrollHeight;
   }, [messages]);
+
+  useEffect(() => () => clearTimeout(glideTimerRef.current), []);
 
   // Each call gets its own user bubble + pending assistant bubble, appended in
   // order immediately. Multiple calls can be in flight at once -- each one's
@@ -163,15 +199,15 @@ export default function Home() {
 
         <div className="relative z-10 mx-auto flex max-w-3xl flex-col gap-4">
           {messages.map((message) => (
-            // The wrapper is keyed by message id, so the fade-in runs once when
-            // a bubble appears -- not again as a pending bubble fills with text.
-            <div key={message.id} className="[animation:message-in_0.3s_ease-out]">
+            // Keyed by message id, so the fade-in runs once when a bubble
+            // appears -- not again as a pending bubble fills with text.
+            <MessageEnter key={message.id}>
               <ChatMessageBubble
                 message={message}
                 jurisdictionFilter={jurisdictionFilter}
                 onOpenSection={setActiveSectionChunk}
               />
-            </div>
+            </MessageEnter>
           ))}
 
           {isWelcomeScreen && (
@@ -188,8 +224,6 @@ export default function Home() {
               ))}
             </div>
           )}
-
-          <div ref={scrollAnchorRef} />
         </div>
       </main>
 

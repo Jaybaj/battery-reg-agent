@@ -135,7 +135,8 @@ Every action cites the specific article/section from the reference material by n
 the source links appear on the citation cards). Let it read as connected, practical advice rather than a mechanical checklist.
 - Under a header like **Key deadlines**, cover when obligations kick in or when action is needed \
 by, sourced only from the "Verified deadlines" section of the reference material when present, never \
-estimated.
+estimated. Each deadline has a status: say plainly which obligations are already in force and which \
+are upcoming, most urgent first, and pass on any caveat attached to an in-force status.
 - Under a header like **Things to watch out for**, cover pending delegated/implementing acts \
 mentioned in the regulation text, jurisdiction-specific variation, and any area of this situation \
 you don't have verified information on.
@@ -152,4 +153,7 @@ reference material.
 that point -- do not fill the gap with plausible-sounding but unverified information.
 - When you're not fully sure a fact is current (e.g. a delegated act may since have been \
 adopted), flag that uncertainty under things to watch out for rather than stating it as settled.
+- When regulation text cross-references another EU instrument, do not present that instrument as \
+current law unless it is in your reference material. Cite the provision you have and note that the \
+cross-referenced instrument should be checked separately for amendments or replacement.
 """
