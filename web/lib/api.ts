@@ -142,3 +142,48 @@ export async function fetchDeadlines(): Promise<Deadline[]> {
   if (!res.ok) throw new Error("Could not load deadlines.");
   return res.json();
 }
+
+export type BatteryCategory = "portable" | "lmt" | "industrial" | "ev" | "sli";
+
+export interface ChecklistRequest {
+  battery_type: BatteryCategory;
+  capacity_kwh: number | null;
+  chemistry: string | null;
+  markets: string[]; // "EU", "US-federal"
+}
+
+export interface ChecklistItem {
+  id: string;
+  jurisdiction: string;
+  instrument: string;
+  section_ref: string;
+  note: string;
+  condition?: string; // e.g. "Applies only above 2 kWh (capacity not given)"
+  urgency: "in_force" | "upcoming" | "undated";
+  deadlines: Deadline[];
+  timing_note: string | null;
+}
+
+export interface Checklist {
+  battery_category: string;
+  covered_markets: string[];
+  no_corpus_coverage: string[];
+  coverage_notes: string[];
+  groups: Record<ChecklistItem["urgency"], ChecklistItem[]>;
+}
+
+export async function fetchChecklist(request: ChecklistRequest): Promise<Checklist> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/checklist`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    throw new Error(UNREACHABLE_MESSAGE);
+  }
+  if (!res.ok) throw new Error("Could not build the checklist.");
+  return res.json();
+}

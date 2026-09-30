@@ -10,9 +10,11 @@ interface HeaderProps {
   onJurisdictionChange?: (value: JurisdictionFilter) => void;
 }
 
+// shortLabel is shown on phones, where three full labels don't fit beside the logo.
 const NAV_LINKS = [
-  { href: "/", label: "Chat" },
-  { href: "/deadlines", label: "Deadlines" },
+  { href: "/", label: "Chat", shortLabel: "Chat" },
+  { href: "/deadlines", label: "Deadlines", shortLabel: "Deadlines" },
+  { href: "/checker", label: "Compliance Checker", shortLabel: "Checker" },
 ];
 
 export default function Header({ jurisdictionFilter, onJurisdictionChange }: HeaderProps) {
@@ -42,7 +44,7 @@ export default function Header({ jurisdictionFilter, onJurisdictionChange }: Hea
         </Link>
 
         <nav className="flex items-center gap-1" aria-label="Main">
-          {NAV_LINKS.map(({ href, label }) => {
+          {NAV_LINKS.map(({ href, label, shortLabel }) => {
             const active = pathname === href;
             return (
               <Link
@@ -54,7 +56,8 @@ export default function Header({ jurisdictionFilter, onJurisdictionChange }: Hea
                   (active ? "bg-white/10 text-white" : "text-slate-300 hover:bg-white/5 hover:text-white")
                 }
               >
-                {label}
+                <span className="sm:hidden">{shortLabel}</span>
+                <span className="hidden sm:inline">{label}</span>
               </Link>
             );
           })}

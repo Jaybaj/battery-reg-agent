@@ -30,8 +30,8 @@ MARKET_ACCESS_TOP_K = 15  # coverage matters more than brevity for "what do I ne
 CHUNKS_PER_OBLIGATION_AREA = 2
 
 _MARKET_ACCESS = re.compile(
-    r"what do (i|we) need to sell|commerciali[sz]|place[sd]? (\w+ ){0,3}on the (\w+ )?market|"
-    r"placing (\w+ ){0,3}on the (\w+ )?market|\blaunch|export(ing)? to|\bsell(ing)? (\w+ ){0,4}in\b|"
+    r"what do (i|we) need to sell|commerciali[sz]|\bplac(e[sd]?|ing)\b[^.?!]{0,80}?\bon the (\w+ )?market|"
+    r"\blaunch|export(ing)? to|\bsell(ing)? (\w+ ){0,4}in\b|"
     r"market (my|our) batter",
     re.IGNORECASE,
 )

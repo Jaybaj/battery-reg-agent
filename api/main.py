@@ -10,12 +10,14 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from agent.checklist import build_checklist
 from agent.orchestrator import FALLBACK_MESSAGE, run_agent, stream_agent
 from agent.tools.list_deadlines_tool import list_deadlines
 from retrieval.search import get_section
@@ -135,6 +137,24 @@ def section(instrument: str, section_ref: str) -> dict:
             detail=f"No section '{section_ref}' found for instrument '{instrument}' in the verified corpus.",
         )
     return result
+
+
+class ChecklistRequest(BaseModel):
+    battery_type: Literal["portable", "lmt", "industrial", "ev", "sli"]
+    capacity_kwh: float | None = Field(default=None, ge=0)
+    chemistry: str | None = None
+    markets: list[str] = Field(min_length=1)
+
+
+@app.post("/checklist")
+def checklist(request: ChecklistRequest) -> dict:
+    """Verified compliance checklist for a battery: obligations with their curated deadlines, grouped by urgency."""
+    return build_checklist(
+        request.battery_type,
+        request.markets,
+        capacity_kwh=request.capacity_kwh,
+        chemistry=request.chemistry,
+    )
 
 
 @app.get("/deadlines")

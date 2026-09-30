@@ -46,7 +46,17 @@ SCHEMA = {
             },
             "capacity_kwh": {
                 "type": "number",
-                "description": "Battery capacity in kWh, if known. Some EU obligations only apply above 2 kWh for industrial batteries.",
+                "description": (
+                    "Battery capacity in kWh, if known. Some EU obligations only apply above 2 kWh for "
+                    "industrial batteries; if omitted, those are returned with a `condition` instead."
+                ),
+            },
+            "chemistry": {
+                "type": "string",
+                "description": (
+                    "Battery chemistry, e.g. 'Li-ion', 'Lead-acid', 'NiMH', if known. 49 CFR 173.185 "
+                    "covers lithium batteries only."
+                ),
             },
             "markets": {
                 "type": "array",
@@ -149,7 +159,24 @@ US_FEDERAL_WASTE = [
 ]
 
 
-def obligations_for(battery_category: str, markets: list[str], capacity_kwh: float | None = None) -> dict[str, Any]:
+def _is_lithium(chemistry: str) -> bool:
+    lowered = chemistry.lower()
+    return "lithium" in lowered or lowered.startswith("li")
+
+
+def obligations_for(
+    battery_category: str,
+    markets: list[str],
+    capacity_kwh: float | None = None,
+    chemistry: str | None = None,
+) -> dict[str, Any]:
+    """Applicable provisions for a battery, from the curated rule table.
+
+    Capacity-gated obligations are included when the capacity is above the
+    threshold, omitted when it's at or below, and included with a
+    `condition` when the capacity isn't known -- so an unknown capacity never
+    silently drops an obligation that may apply.
+    """
     category_key = battery_category.strip().lower()
     category = BATTERY_CATEGORIES.get(category_key)
     if category is None:
@@ -161,6 +188,7 @@ def obligations_for(battery_category: str, markets: list[str], capacity_kwh: flo
     obligations: list[dict[str, Any]] = []
     covered_markets: list[str] = []
     no_corpus_coverage: list[str] = []
+    coverage_notes: list[str] = []
 
     if any(m == "EU" or m.startswith("EU-") for m in markets):
         covered_markets.append("EU")
@@ -168,26 +196,29 @@ def obligations_for(battery_category: str, markets: list[str], capacity_kwh: flo
             obligations.append(
                 {"jurisdiction": "EU", "instrument": INSTRUMENT_EU, "section_ref": section_ref, "note": note}
             )
-        if capacity_kwh is not None:
-            for threshold, gated in category["capacity_gated"]:
-                if capacity_kwh > threshold:
-                    for section_ref, note in gated:
-                        obligations.append(
-                            {
-                                "jurisdiction": "EU",
-                                "instrument": INSTRUMENT_EU,
-                                "section_ref": section_ref,
-                                "note": note,
-                            }
-                        )
+        for threshold, gated in category["capacity_gated"]:
+            if capacity_kwh is not None and capacity_kwh <= threshold:
+                continue
+            for section_ref, note in gated:
+                obligation = {"jurisdiction": "EU", "instrument": INSTRUMENT_EU, "section_ref": section_ref, "note": note}
+                if capacity_kwh is None:
+                    obligation["condition"] = f"Applies only above {threshold:g} kWh (capacity not given)"
+                obligations.append(obligation)
 
     us_markets = [m for m in markets if m == "US-federal" or m.startswith("US-")]
     if us_markets:
         covered_markets.append("US-federal")
-        for section_ref, note in US_FEDERAL_TRANSPORT:
-            obligations.append(
-                {"jurisdiction": "US-federal", "instrument": INSTRUMENT_DOT, "section_ref": section_ref, "note": note}
+        if chemistry and not _is_lithium(chemistry):
+            coverage_notes.append(
+                f"49 CFR 173.185 covers lithium batteries only; US transport rules for {chemistry} "
+                "batteries are not in the verified corpus."
             )
+        else:
+            for section_ref, note in US_FEDERAL_TRANSPORT:
+                obligation = {"jurisdiction": "US-federal", "instrument": INSTRUMENT_DOT, "section_ref": section_ref, "note": note}
+                if not chemistry:
+                    obligation["condition"] = "Applies to lithium cells and batteries"
+                obligations.append(obligation)
         for section_ref, note in US_FEDERAL_WASTE:
             obligations.append(
                 {"jurisdiction": "US-federal", "instrument": INSTRUMENT_UWR, "section_ref": section_ref, "note": note}
@@ -206,6 +237,7 @@ def obligations_for(battery_category: str, markets: list[str], capacity_kwh: flo
         "obligations": obligations,
         "covered_markets": covered_markets,
         "no_corpus_coverage": sorted(set(no_corpus_coverage)),
+        "coverage_notes": coverage_notes,
     }
 
 
@@ -214,5 +246,6 @@ def execute(tool_input: dict[str, Any]) -> str:
         battery_category=tool_input["battery_category"],
         markets=tool_input["markets"],
         capacity_kwh=tool_input.get("capacity_kwh"),
+        chemistry=tool_input.get("chemistry"),
     )
     return json.dumps(result, ensure_ascii=False)

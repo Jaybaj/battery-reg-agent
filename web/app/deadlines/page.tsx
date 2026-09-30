@@ -3,7 +3,9 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import Header from "../../components/Header";
 import SectionModal from "../../components/SectionModal";
+import StatusBadge from "../../components/StatusBadge";
 import { fetchDeadlines, type Deadline } from "../../lib/api";
+import { formatIsoDate } from "../../lib/format";
 import { jurisdictionFlag, matchesJurisdictionFilter } from "../../lib/jurisdiction";
 import type { ChunkUsed, JurisdictionFilter } from "../../lib/types";
 
@@ -40,12 +42,6 @@ function todayIso(): string {
 function isInForce(deadline: Deadline, today: string): boolean {
   // The API computes status; fall back to the date for an older backend.
   return deadline.status ? deadline.status === "in force" : deadline.deadline_date <= today;
-}
-
-// Formatted in UTC so an ISO date never shifts a day in the viewer's timezone.
-const DATE_FORMAT = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
-function formatDate(iso: string): string {
-  return DATE_FORMAT.format(new Date(`${iso}T00:00:00Z`));
 }
 
 // Curated refs are often sub-provisions ("Article 7(1)(a)", "Article 8(1),
@@ -93,18 +89,6 @@ function FilterGroup<T extends string>({
   );
 }
 
-function StatusBadge({ inForce }: { inForce: boolean }) {
-  return inForce ? (
-    <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20">
-      In force
-    </span>
-  ) : (
-    <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700 ring-1 ring-amber-600/25">
-      Upcoming
-    </span>
-  );
-}
-
 function TimelineItem({
   deadline,
   inForce,
@@ -125,9 +109,9 @@ function TimelineItem({
       />
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <time dateTime={deadline.deadline_date} className="text-lg font-semibold text-navy">
-          {formatDate(deadline.deadline_date)}
+          {formatIsoDate(deadline.deadline_date)}
         </time>
-        <StatusBadge inForce={inForce} />
+        <StatusBadge status={inForce ? "in force" : "upcoming"} />
       </div>
 
       <div className="mt-2 rounded-xl border border-slate-200/80 bg-white px-4 py-3 shadow-sm">
@@ -244,7 +228,7 @@ export default function DeadlinesPage() {
                           <span className="absolute left-0.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-teal" aria-hidden />
                           <div className="flex items-center gap-3">
                             <span className="text-xs font-semibold uppercase tracking-wide text-teal-dark">
-                              Today · {formatDate(today)}
+                              Today · {formatIsoDate(today)}
                             </span>
                             <span className="h-px flex-1 bg-teal/30" />
                           </div>
