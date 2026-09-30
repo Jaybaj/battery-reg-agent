@@ -4,6 +4,7 @@ import type { ChatMessage, ChunkUsed, JurisdictionFilter } from "../lib/types";
 import { matchesJurisdictionFilter } from "../lib/jurisdiction";
 import AnswerMarkdown from "./AnswerMarkdown";
 import CitationCard from "./CitationCard";
+import CopyActions from "./CopyActions";
 
 interface ChatMessageBubbleProps {
   message: ChatMessage;
@@ -47,9 +48,19 @@ export default function ChatMessageBubble({ message, jurisdictionFilter, onOpenS
   const allChunks = message.chunksUsed ?? [];
   const visibleChunks = allChunks.filter((chunk) => matchesJurisdictionFilter(chunk.jurisdiction, jurisdictionFilter));
 
+  // Not on the welcome card, and not while text is still streaming in.
+  const showCopy = message.id !== "welcome" && !message.streaming && message.content.length > 0;
+
   return (
     <div className="flex justify-start">
-      <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-slate-200/80 bg-white px-5 py-4 shadow-sm">
+      <div
+        className={
+          "group relative max-w-[85%] rounded-2xl rounded-bl-sm border border-slate-200/80 bg-white px-5 py-4 shadow-sm" +
+          // Copy buttons are always shown on small screens, so leave room above the text for them.
+          (showCopy ? " pt-11 md:pt-4" : "")
+        }
+      >
+        {showCopy && <CopyActions content={message.content} chunks={visibleChunks} />}
         <AnswerMarkdown content={message.content} />
 
         {allChunks.length > 0 && (
